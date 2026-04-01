@@ -56,6 +56,24 @@ namespace OSMImporter.Data
                 }
                 mapData.Ways.Add(way);
             }
+
+            if ((mapData.Bounds.MinLat == 0 && mapData.Bounds.MaxLat == 0) && mapData.Nodes.Count > 0)
+            {
+                double minLat = double.MaxValue, maxLat = double.MinValue;
+                double minLon = double.MaxValue, maxLon = double.MinValue;
+                foreach (var node in mapData.Nodes.Values)
+                {
+                    if (node.Latitude < minLat) minLat = node.Latitude;
+                    if (node.Latitude > maxLat) maxLat = node.Latitude;
+                    if (node.Longitude < minLon) minLon = node.Longitude;
+                    if (node.Longitude > maxLon) maxLon = node.Longitude;
+                }
+                mapData.Bounds.MinLat = minLat;
+                mapData.Bounds.MaxLat = maxLat;
+                mapData.Bounds.MinLon = minLon;
+                mapData.Bounds.MaxLon = maxLon;
+            }
+
             return mapData;
         }
 

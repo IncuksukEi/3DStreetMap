@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using OSMImporter.Navigation;
@@ -13,7 +14,14 @@ namespace OSMImporter.Traffic
     /// </summary>
     public class TrafficSpawner : MonoBehaviour
     {
-        [Header("Counts")]
+        [Header("Continuous Spawning")]
+        public bool ContinuousSpawning = true;
+        [Range(0.05f, 2f)]
+        public float SpawnInterval = 0.15f;
+        [Range(10, 1000)]
+        public int MaxActiveVehicles = 300;
+
+        [Header("Counts (If not Continuous)")]
         public int CarCount       = 10;
         public int MotoCount      = 12;
         public int BusCount       =  2;
@@ -47,7 +55,17 @@ namespace OSMImporter.Traffic
         private readonly List<VehicleAgent> _agents = new List<VehicleAgent>();
         private int _vehicleLayer;
 
+        public static TrafficSpawner Instance;
+        [HideInInspector] public List<Transform> Buildings = new List<Transform>();
+        [HideInInspector] public List<Waypoint>  EdgeNodes = new List<Waypoint>();
+
         // ── lifecycle ─────────────────────────────────────────────────────────
+
+        private void Awake()
+        {
+            Instance = this;
+            Random.InitState((int)System.DateTime.Now.Ticks);
+        }
 
         private void Start()
         {
@@ -59,11 +77,70 @@ namespace OSMImporter.Traffic
                 return;
             }
 
+            // Lấy toàn bộ toà nhà trong scene làm điểm Spawn/End
+            foreach (GameObject go in FindObjectsByType<GameObject>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+            {
+                if (go.name.StartsWith("Building", System.StringComparison.OrdinalIgnoreCase))
+                    Buildings.Add(go.transform);
+            }
+            if (Buildings.Count == 0)
+                Debug.LogWarning("[TrafficSpawner] Không tìm thấy toà nhà nào (tên bắt đầu bằng 'Building'). Xe sẽ spawn ngẫu nhiên trên đường.");
+
+            // Quét các Node rìa bản đồ (chỉ có 1 kết nối - đoạn cắt của OSM) để làm điểm Spawn / End hợp lý
+            EdgeNodes.Clear();
+            foreach (var kvp in Graph.Waypoints)
+            {
+                if (kvp.Value.ConnectedWaypointIds.Count <= 1)
+                    EdgeNodes.Add(kvp.Value);
+            }
+            if (EdgeNodes.Count == 0)
+                Debug.LogWarning("[TrafficSpawner] Không tìm thấy node rìa (Edge Node). Xe sẽ phải spawn giữa đường.");
+
             // Ensure a layer named "OsmVehicle" exists (Unity allows up to user layer 31)
             _vehicleLayer = EnsureLayer("OsmVehicle");
             Physics.IgnoreLayerCollision(_vehicleLayer, _vehicleLayer, true);
 
-            SpawnAll();
+            if (GetComponent<TrafficLightManager>() == null)
+            {
+                var tlm = gameObject.AddComponent<TrafficLightManager>();
+                tlm.Graph = Graph;
+            }
+
+            if (ContinuousSpawning)
+            {
+                StartCoroutine(SpawnRoutine());
+            }
+            else
+            {
+                SpawnAll();
+            }
+        }
+
+        private void Update()
+        {
+            _agents.RemoveAll(a => a == null);
+            
+            // Cập nhật SpeedScale runtime cho toàn bộ xe đang chạy
+            foreach (var a in _agents)
+            {
+                if (a != null)
+                    a.RuntimeSpeedScale = SpeedScale;
+            }
+        }
+
+        private IEnumerator SpawnRoutine()
+        {
+            while (true)
+            {
+                if (_agents.Count < MaxActiveVehicles)
+                {
+                    float r = Random.value;
+                    if (r < 0.15f) Spawn(1, VehicleMeshBuilder.VehicleType.Bus, new[] { BusColor });
+                    else if (r < 0.45f) Spawn(1, VehicleMeshBuilder.VehicleType.Motorbike, MotoColors);
+                    else Spawn(1, VehicleMeshBuilder.VehicleType.Car, CarColors);
+                }
+                yield return new WaitForSeconds(SpawnInterval);
+            }
         }
 
         private void OnDestroy()
@@ -84,36 +161,55 @@ namespace OSMImporter.Traffic
 
         private void Spawn(int count, VehicleMeshBuilder.VehicleType type, Color[] palette)
         {
-            var waypointList = new List<Waypoint>(Graph.Waypoints.Values);
-            if (waypointList.Count == 0) return;
+            if (Graph.Waypoints.Count == 0) return;
 
             for (int i = 0; i < count; i++)
             {
-                // Pick a random waypoint that's far enough from existing vehicles
-                Waypoint wp = PickSpawnWaypoint(waypointList);
+                Waypoint wp = PickSpawnWaypoint();
                 Color color = palette[Random.Range(0, palette.Length)];
 
                 GameObject vehicleGO = VehicleMeshBuilder.Build(type, color);
                 vehicleGO.transform.SetParent(transform, false);
-                vehicleGO.transform.position  = wp.Position;
-                vehicleGO.transform.rotation  = Quaternion.Euler(0, Random.Range(0, 360f), 0);
+                vehicleGO.transform.position = wp.Position;
+
+                // Xoay xe theo hướng đường (hướng về node kết nối đầu tiên)
+                if (wp.ConnectedWaypointIds.Count > 0)
+                {
+                    long firstConnId = wp.ConnectedWaypointIds[0];
+                    if (Graph.Waypoints.TryGetValue(firstConnId, out Waypoint nextWp))
+                    {
+                        Vector3 dir = (nextWp.Position - wp.Position);
+                        dir.y = 0;
+                        if (dir.sqrMagnitude > 0.01f)
+                            vehicleGO.transform.rotation = Quaternion.LookRotation(dir.normalized);
+                    }
+                }
+
                 vehicleGO.layer = _vehicleLayer;
                 foreach (Transform c in vehicleGO.GetComponentsInChildren<Transform>())
                     c.gameObject.layer = _vehicleLayer;
 
-                // BoxCollider sized to new vehicle dimensions for braking raycast
                 var col    = vehicleGO.AddComponent<BoxCollider>();
                 float vLen = GetLength(type);
-                col.size   = new Vector3(2f, 1.5f, vLen);
-                col.center = new Vector3(0, 0.75f, 0);
+                float vW   = GetWidth(type);
+                col.size   = new Vector3(vW, 1.2f, vLen);
+                col.center = new Vector3(0, 0.5f, 0);
 
                 var agent = vehicleGO.AddComponent<VehicleAgent>();
                 agent.Graph        = Graph;
                 agent.VehicleType  = type;
-                agent.BaseSpeed    = GetBaseSpeed(type) * SpeedScale;
+                agent.VehicleWidth = vW;
+                // Lưu base speed gốc (không nhân SpeedScale) để có thể thay đổi tốc độ runtime
+                agent.BaseSpeed    = GetBaseSpeed(type) * Random.Range(0.7f, 1.3f);
+                agent.RuntimeSpeedScale = SpeedScale;
                 agent.VehicleLayer = 1 << _vehicleLayer;
-                agent.StopDistance = vLen * 1.5f;   // brake distance proportional to vehicle length
+                agent.StopDistance = vLen * 1.5f;
                 agent.Wheels       = FindWheels(vehicleGO.transform);
+                agent.DestroyOnArrival = ContinuousSpawning;
+                int lane = Random.Range(0, 2);
+                agent.LaneIndex     = lane;
+                agent.PreferredLane = lane;
+                agent.Patience      = Random.Range(3f, 8f);
 
                 _agents.Add(agent);
             }
@@ -121,19 +217,44 @@ namespace OSMImporter.Traffic
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
-        private Waypoint PickSpawnWaypoint(List<Waypoint> list)
+        private Waypoint PickSpawnWaypoint()
         {
-            for (int attempt = 0; attempt < 10; attempt++)
+            var list = new List<Waypoint>(Graph.Waypoints.Values);
+            
+            for (int attempt = 0; attempt < 20; attempt++)
             {
-                var wp = list[Random.Range(0, list.Count)];
+                Waypoint wp = null;
+                
+                // Ưu tiên spawn từ rìa map (edge nodes) — xe xuất hiện tự nhiên từ ngoài vào
+                if (EdgeNodes.Count > 0 && Random.value < 0.85f)
+                {
+                    wp = EdgeNodes[Random.Range(0, EdgeNodes.Count)];
+                }
+                else if (Buildings != null && Buildings.Count > 0)
+                {
+                    Transform bldg = Buildings[Random.Range(0, Buildings.Count)];
+                    wp = Graph.FindNearest(bldg.position);
+                }
+                else
+                {
+                    wp = list[Random.Range(0, list.Count)];
+                }
+
+                if (wp == null) continue;
+                
+                // Kiểm tra không spawn chồng lên xe khác
                 bool tooClose = false;
                 foreach (var a in _agents)
                 {
-                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < 20f)
+                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < 8f)
                     { tooClose = true; break; }
                 }
                 if (!tooClose) return wp;
             }
+            
+            // Fallback: chọn edge node bất kỳ
+            if (EdgeNodes.Count > 0)
+                return EdgeNodes[Random.Range(0, EdgeNodes.Count)];
             return list[Random.Range(0, list.Count)];
         }
 
@@ -154,9 +275,16 @@ namespace OSMImporter.Traffic
 
         private static float GetLength(VehicleMeshBuilder.VehicleType t)
         {
-            if (t == VehicleMeshBuilder.VehicleType.Bus)       return 14f;
-            if (t == VehicleMeshBuilder.VehicleType.Motorbike) return 4f;
-            return 7f;
+            if (t == VehicleMeshBuilder.VehicleType.Bus)       return 2.5f;
+            if (t == VehicleMeshBuilder.VehicleType.Motorbike) return 0.55f;
+            return 1.1f;
+        }
+
+        private static float GetWidth(VehicleMeshBuilder.VehicleType t)
+        {
+            if (t == VehicleMeshBuilder.VehicleType.Bus)       return 0.625f;
+            if (t == VehicleMeshBuilder.VehicleType.Motorbike) return 0.2f;
+            return 0.45f;
         }
 
         // ── Layer helper (editor only — at runtime layers are read-only) ──────
@@ -175,18 +303,19 @@ namespace OSMImporter.Traffic
         // ── Stats overlay ─────────────────────────────────────────────────────
 
         // Cached to avoid GC allocation every frame
+        private bool _panelOpen = true;
         private GUIStyle _titleStyle;
         private GUIStyle _statStyle;
+        private GUIStyle _sliderLabelStyle;
 
         private void OnGUI()
         {
-            // Lazy init — GUISkin is only valid inside OnGUI
             if (_titleStyle == null)
             {
                 _titleStyle = new GUIStyle(GUI.skin.label)
                 {
                     fontStyle = FontStyle.Bold,
-                    fontSize  = 13,
+                    fontSize  = 14,
                     normal    = { textColor = new Color(0.4f, 0.9f, 1f) }
                 };
                 _statStyle = new GUIStyle(GUI.skin.label)
@@ -194,20 +323,61 @@ namespace OSMImporter.Traffic
                     fontSize = 12,
                     normal   = { textColor = Color.white }
                 };
+                _sliderLabelStyle = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 11,
+                    normal   = { textColor = new Color(0.9f, 0.9f, 0.7f) }
+                };
             }
 
-            int active = 0;
-            foreach (var a in _agents) if (a && a.enabled) active++;
-            int wps = Graph != null ? Graph.Waypoints.Count : 0;
+            const float panW = 220f, pad = 10f;
+            float startX = Screen.width - panW - pad;
+            float startY = pad;
 
-            const float panW = 220f, panH = 74f, pad = 10f;
-            GUI.color = new Color(0.05f, 0.05f, 0.05f, 0.78f);
-            GUI.DrawTexture(new Rect(pad, pad, panW, panH), Texture2D.whiteTexture, ScaleMode.StretchToFill);
-            GUI.color = Color.white;
+            // Nút toggle ẩn/hiện panel
+            if (GUI.Button(new Rect(startX + panW - 25, startY, 25, 20), _panelOpen ? "▼" : "▶"))
+                _panelOpen = !_panelOpen;
 
-            GUI.Label(new Rect(pad + 8, pad +  5, panW - 16, 22), "🗺  OSM Traffic", _titleStyle);
-            GUI.Label(new Rect(pad + 8, pad + 26, panW - 16, 18), $"🚗  Vehicles: {active} / {_agents.Count}", _statStyle);
-            GUI.Label(new Rect(pad + 8, pad + 44, panW - 16, 18), $"⏩  Speed ×{SpeedScale:F1}   🧭  WPs: {wps}", _statStyle);
+            if (!_panelOpen)
+            {
+                GUI.Box(new Rect(startX, startY, panW, 22), "");
+                GUI.Label(new Rect(startX + 8, startY + 2, panW - 40, 18), "OSM Traffic", _titleStyle);
+                return;
+            }
+
+            float panH = 170f;
+            GUI.Box(new Rect(startX, startY, panW, panH), "");
+
+            float y = startY + 5;
+            float labelW = panW - 16;
+
+            // Title + Stats
+            GUI.Label(new Rect(startX + 8, y, labelW, 20), "OSM Traffic Control", _titleStyle);
+            y += 22;
+
+            int active = _agents.Count;
+            GUI.Label(new Rect(startX + 8, y, labelW, 18), $"Vehicles: {active} / {MaxActiveVehicles}", _statStyle);
+            y += 20;
+
+            // Slider: Max Vehicles
+            GUI.Label(new Rect(startX + 8, y, labelW, 16), $"Max Vehicles: {MaxActiveVehicles}", _sliderLabelStyle);
+            y += 16;
+            MaxActiveVehicles = Mathf.RoundToInt(GUI.HorizontalSlider(
+                new Rect(startX + 8, y, labelW, 16), MaxActiveVehicles, 10, 1000));
+            y += 20;
+
+            // Slider: Spawn Interval
+            GUI.Label(new Rect(startX + 8, y, labelW, 16), $"Spawn Rate: {SpawnInterval:F2}s", _sliderLabelStyle);
+            y += 16;
+            SpawnInterval = GUI.HorizontalSlider(
+                new Rect(startX + 8, y, labelW, 16), SpawnInterval, 0.05f, 2f);
+            y += 20;
+
+            // Slider: Speed
+            GUI.Label(new Rect(startX + 8, y, labelW, 16), $"Speed: x{SpeedScale:F1}", _sliderLabelStyle);
+            y += 16;
+            SpeedScale = GUI.HorizontalSlider(
+                new Rect(startX + 8, y, labelW, 16), SpeedScale, 0.1f, 5f);
         }
     }
 }

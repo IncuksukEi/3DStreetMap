@@ -14,7 +14,7 @@ namespace OSMImporter.Navigation
         public bool ShowPathGizmos = true;
         public Color PathColor = Color.green;
 
-        private List<Vector3> _currentPath = new List<Vector3>();
+        private List<Waypoint> _currentPath = new List<Waypoint>();
         private int _currentPathIndex = 0;
         private Waypoint _currentWaypoint;
         private bool _isMoving = false;
@@ -36,12 +36,14 @@ namespace OSMImporter.Navigation
         {
             if (!_isMoving || _currentPath.Count == 0) return;
 
-            Vector3 target = _currentPath[_currentPathIndex];
+            Vector3 target = _currentPath[_currentPathIndex].Position;
             Vector3 direction = target - transform.position; direction.y = 0;
             float distance = direction.magnitude;
 
             if (distance < ArrivalThreshold)
             {
+                // Update current waypoint as we traverse path
+                _currentWaypoint = _currentPath[_currentPathIndex];
                 if (++_currentPathIndex >= _currentPath.Count)
                 {
                     _isMoving = false;
@@ -81,7 +83,7 @@ namespace OSMImporter.Navigation
             long nextId = _currentWaypoint.ConnectedWaypointIds[Random.Range(0, _currentWaypoint.ConnectedWaypointIds.Count)];
             if (Graph.Waypoints.TryGetValue(nextId, out Waypoint nextWp))
             {
-                _currentPath.Clear(); _currentPath.Add(nextWp.Position);
+                _currentPath.Clear(); _currentPath.Add(nextWp);
                 _currentPathIndex = 0; _currentWaypoint = nextWp; _isMoving = true;
             }
         }
@@ -91,8 +93,8 @@ namespace OSMImporter.Navigation
         {
             if (!ShowPathGizmos || _currentPath == null || _currentPath.Count == 0) return;
             Gizmos.color = PathColor;
-            for (int i = _currentPathIndex; i < _currentPath.Count - 1; i++) { Gizmos.DrawLine(_currentPath[i], _currentPath[i + 1]); Gizmos.DrawSphere(_currentPath[i], 0.3f); }
-            if (_currentPath.Count > 0) Gizmos.DrawSphere(_currentPath[_currentPath.Count - 1], 0.5f);
+            for (int i = _currentPathIndex; i < _currentPath.Count - 1; i++) { Gizmos.DrawLine(_currentPath[i].Position, _currentPath[i + 1].Position); Gizmos.DrawSphere(_currentPath[i].Position, 0.3f); }
+            if (_currentPath.Count > 0) Gizmos.DrawSphere(_currentPath[_currentPath.Count - 1].Position, 0.5f);
         }
 #endif
     }

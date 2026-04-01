@@ -12,6 +12,7 @@ namespace OSMImporter.Navigation
         public Vector3  Position;
         public List<long> ConnectedWaypointIds = new List<long>();
         public string   RoadType = "";
+        public bool     IsTrafficLight = false;
     }
 
     // ── Serializable container so Dictionary survives Play mode ──────────────
@@ -22,6 +23,7 @@ namespace OSMImporter.Navigation
         public Vector3  Position;
         public string   RoadType;
         public long[]   Connections;
+        public bool     IsTrafficLight;
     }
 
     public class WaypointGraph : MonoBehaviour
@@ -66,7 +68,8 @@ namespace OSMImporter.Navigation
                             Position  = MercatorProjection.LatLonToUnityCorrected(
                                             osmNode.Latitude, osmNode.Longitude,
                                             originLat, originLon, scale),
-                            RoadType  = way.HighwayType
+                            RoadType  = way.HighwayType,
+                            IsTrafficLight = osmNode.Tags.TryGetValue("highway", out string hw) && hw == "traffic_signals"
                         };
                     }
 
@@ -75,10 +78,26 @@ namespace OSMImporter.Navigation
                         long prevId = way.NodeRefs[i - 1];
                         if (Waypoints.ContainsKey(prevId))
                         {
-                            if (!Waypoints[nodeId].ConnectedWaypointIds.Contains(prevId))
-                                Waypoints[nodeId].ConnectedWaypointIds.Add(prevId);
-                            if (!Waypoints[prevId].ConnectedWaypointIds.Contains(nodeId))
-                                Waypoints[prevId].ConnectedWaypointIds.Add(nodeId);
+                            bool isOneWay = way.IsOneWay || way.HighwayType == "motorway"; 
+                            bool isReverse = way.IsReverseOneWay;
+
+                            // Chiều xuôi (prevId -> nodeId)
+                            if (!isReverse)
+                            {
+                                if (!Waypoints[prevId].ConnectedWaypointIds.Contains(nodeId))
+                                    Waypoints[prevId].ConnectedWaypointIds.Add(nodeId);
+                            }
+                            // Chiều ngược (nodeId -> prevId)
+                            if (!isOneWay && !isReverse) // !isReverse để an toàn, nếu isReverse thì được phép ngược
+                            {
+                                if (!Waypoints[nodeId].ConnectedWaypointIds.Contains(prevId))
+                                    Waypoints[nodeId].ConnectedWaypointIds.Add(prevId);
+                            }
+                            else if (isReverse)
+                            {
+                                if (!Waypoints[nodeId].ConnectedWaypointIds.Contains(prevId))
+                                    Waypoints[nodeId].ConnectedWaypointIds.Add(prevId);
+                            }
                         }
                     }
                 }
@@ -100,7 +119,8 @@ namespace OSMImporter.Navigation
                     Id          = kv.Value.OSMNodeId,
                     Position    = kv.Value.Position,
                     RoadType    = kv.Value.RoadType,
-                    Connections = kv.Value.ConnectedWaypointIds.ToArray()
+                    Connections = kv.Value.ConnectedWaypointIds.ToArray(),
+                    IsTrafficLight = kv.Value.IsTrafficLight
                 });
             }
         }
@@ -115,7 +135,8 @@ namespace OSMImporter.Navigation
                     OSMNodeId            = e.Id,
                     Position             = e.Position,
                     RoadType             = e.RoadType,
-                    ConnectedWaypointIds = new List<long>(e.Connections ?? System.Array.Empty<long>())
+                    ConnectedWaypointIds = new List<long>(e.Connections ?? System.Array.Empty<long>()),
+                    IsTrafficLight       = e.IsTrafficLight
                 };
             }
         }
@@ -134,57 +155,81 @@ namespace OSMImporter.Navigation
             return nearest;
         }
 
-        public List<Vector3> FindPath(long startId, long endId)
+        private float GetRoadWeight(string roadType)
         {
-            var path = new List<Vector3>();
+            if (string.IsNullOrEmpty(roadType)) return 1.5f;
+            switch(roadType) {
+                case "motorway": return 0.5f;    // Ưu tiên đi đường cao tốc (chi phí thấp)
+                case "trunk":    return 0.6f;
+                case "primary":  return 0.7f;
+                case "secondary":return 0.9f;
+                case "tertiary": return 1.0f;
+                case "residential": return 1.8f; // Tránh đi đường nhỏ khu dân cư
+                case "living_street": return 2.5f;
+                default: return 1.2f;
+            }
+        }
+
+        public List<Waypoint> FindPath(long startId, long endId)
+        {
+            var path = new List<Waypoint>();
             if (!Waypoints.ContainsKey(startId) || !Waypoints.ContainsKey(endId)) return path;
 
-            var openSet     = new SortedDictionary<float, long>();
-            var cameFrom    = new Dictionary<long, long>();
-            var gScore      = new Dictionary<long, float>();
-            var openSetHash = new HashSet<long>();
+            // Open list: sorted by f-score ascending. Using List + insert to avoid key collision.
+            var openList  = new List<(float f, long id)>();
+            var cameFrom  = new Dictionary<long, long>();
+            var gScore    = new Dictionary<long, float>();
+            var closedSet = new HashSet<long>();
 
             gScore[startId] = 0;
             float h = Vector3.Distance(Waypoints[startId].Position, Waypoints[endId].Position);
-            openSet[h] = startId;
-            openSetHash.Add(startId);
+            openList.Add((h, startId));
 
             int safety = 100000;
-            while (openSet.Count > 0 && safety-- > 0)
+            while (openList.Count > 0 && safety-- > 0)
             {
-                var enumerator = openSet.GetEnumerator(); enumerator.MoveNext();
-                float currentKey = enumerator.Current.Key;
-                long  current    = enumerator.Current.Value;
-                openSet.Remove(currentKey);
-                openSetHash.Remove(current);
+                // Pop node with lowest f-score
+                long current = openList[0].id;
+                openList.RemoveAt(0);
+
+                if (closedSet.Contains(current)) continue; // skip stale entries
+                closedSet.Add(current);
 
                 if (current == endId)
                 {
                     long c = endId;
-                    while (cameFrom.ContainsKey(c)) { path.Insert(0, Waypoints[c].Position); c = cameFrom[c]; }
-                    path.Insert(0, Waypoints[startId].Position);
+                    while (cameFrom.ContainsKey(c)) { path.Insert(0, Waypoints[c]); c = cameFrom[c]; }
+                    path.Insert(0, Waypoints[startId]);
                     return path;
                 }
 
                 Waypoint currentWp = Waypoints[current];
                 foreach (long neighborId in currentWp.ConnectedWaypointIds)
                 {
-                    if (!Waypoints.ContainsKey(neighborId)) continue;
-                    float tentativeG = gScore[current] +
-                        Vector3.Distance(currentWp.Position, Waypoints[neighborId].Position);
+                    if (!Waypoints.ContainsKey(neighborId) || closedSet.Contains(neighborId)) continue;
+
+                    // Tính chi phí bao gồm: Khảng cách vật lý x Trọng số loại đường x Hệ số ngẫu nhiên
+                    // Giúp xe ưu tiên đi đường lớn (tối ưu hơn) và phân tán ra các đường song song (không đi dồn 1 đường duy nhất)
+                    float edgeDist = Vector3.Distance(currentWp.Position, Waypoints[neighborId].Position);
+                    float roadWeight = GetRoadWeight(Waypoints[neighborId].RoadType);
+                    float randomFactor = Random.Range(0.85f, 1.15f); // Noise 15% để tránh tình trạng "quãng đường bằng nhau"
+                    
+                    float tentativeG = gScore[current] + (edgeDist * roadWeight * randomFactor);
+                    
                     if (!gScore.TryGetValue(neighborId, out float existingG)) existingG = float.MaxValue;
 
                     if (tentativeG < existingG)
                     {
                         cameFrom[neighborId] = current;
                         gScore[neighborId]   = tentativeG;
-                        float f = tentativeG + Vector3.Distance(Waypoints[neighborId].Position, Waypoints[endId].Position);
-                        if (!openSetHash.Contains(neighborId))
-                        {
-                            while (openSet.ContainsKey(f)) f += 0.001f;
-                            openSet[f] = neighborId;
-                            openSetHash.Add(neighborId);
-                        }
+                        
+                        // Heuristic sử dụng đường chim bay (gạch nối thẳng) nhân với trọng số tối ưu nhất để đảm bảo thuật toán admissible
+                        float f = tentativeG + (Vector3.Distance(Waypoints[neighborId].Position, Waypoints[endId].Position) * 0.5f);
+                        // Binary-search insert to keep list sorted
+                        int idx = openList.BinarySearch((f, neighborId),
+                            Comparer<(float f, long id)>.Create((a, b) => a.f.CompareTo(b.f)));
+                        if (idx < 0) idx = ~idx;
+                        openList.Insert(idx, (f, neighborId));
                     }
                 }
             }

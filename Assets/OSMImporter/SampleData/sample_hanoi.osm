@@ -1,47 +1,94 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="CGImap 0.8.3">
-  <bounds minlat="21.0330" minlon="105.8490" maxlat="21.0345" maxlon="105.8510"/>
+  <!-- Map bounds very small -->
+  <bounds minlat="21.0320" minlon="105.8490" maxlat="21.0340" maxlon="105.8510"/>
   
-  <!-- Nodes for Streets -->
-  <node id="1001" lat="21.0335" lon="105.8495"/>
-  <node id="1002" lat="21.0340" lon="105.8495"/>
-  <node id="1003" lat="21.0335" lon="105.8505"/>
-  <node id="1004" lat="21.0340" lon="105.8505"/>
-  
-  <!-- Ways for Streets -->
-  <way id="2001">
-    <nd ref="1001"/><nd ref="1002"/>
-    <tag k="highway" v="residential"/><tag k="name" v="Hang Ngang Street"/>
+  <!-- GRID NODES (3x3 Matrix) -->
+  <!-- Bottom Row -->
+  <node id="100" lat="21.0325" lon="105.8495"/>
+  <node id="101" lat="21.0325" lon="105.8500"/>
+  <node id="102" lat="21.0325" lon="105.8505"/>
+
+  <!-- Middle Row -->
+  <node id="110" lat="21.0330" lon="105.8495"/>
+  <node id="111" lat="21.0330" lon="105.8500"/>
+  <node id="112" lat="21.0330" lon="105.8505"/>
+
+  <!-- Top Row -->
+  <node id="120" lat="21.0335" lon="105.8495"/>
+  <node id="121" lat="21.0335" lon="105.8500"/>
+  <node id="122" lat="21.0335" lon="105.8505"/>
+
+  <!-- HORIZONTAL WAYS -->
+  <way id="200">
+    <nd ref="100"/><nd ref="101"/><nd ref="102"/>
+    <tag k="highway" v="primary"/>
   </way>
-  <way id="2002">
-    <nd ref="1001"/><nd ref="1003"/>
-    <tag k="highway" v="residential"/><tag k="name" v="Hang Dao Street"/>
+  <way id="201">
+    <nd ref="110"/><nd ref="111"/><nd ref="112"/>
+    <tag k="highway" v="primary"/>
   </way>
-  <way id="2003">
-    <nd ref="1003"/><nd ref="1004"/>
-    <tag k="highway" v="residential"/>
-  </way>
-  <way id="2004">
-    <nd ref="1002"/><nd ref="1004"/>
-    <tag k="highway" v="residential"/>
+  <way id="202">
+    <nd ref="120"/><nd ref="121"/><nd ref="122"/>
+    <tag k="highway" v="primary"/>
   </way>
 
-  <!-- Buildings -->
-  <node id="5001" lat="21.0336" lon="105.8496"/>
-  <node id="5002" lat="21.0338" lon="105.8496"/>
-  <node id="5003" lat="21.0338" lon="105.8498"/>
-  <node id="5004" lat="21.0336" lon="105.8498"/>
-  <way id="6001">
-    <nd ref="5001"/><nd ref="5002"/><nd ref="5003"/><nd ref="5004"/><nd ref="5001"/>
-    <tag k="building" v="yes"/><tag k="building:levels" v="3"/>
+  <!-- VERTICAL WAYS -->
+  <way id="210">
+    <nd ref="100"/><nd ref="110"/><nd ref="120"/>
+    <tag k="highway" v="primary"/>
+  </way>
+  <way id="211">
+    <nd ref="101"/><nd ref="111"/><nd ref="121"/>
+    <tag k="highway" v="primary"/>
+  </way>
+  <way id="212">
+    <nd ref="102"/><nd ref="112"/><nd ref="122"/>
+    <tag k="highway" v="primary"/>
   </way>
 
-  <node id="5101" lat="21.0336" lon="105.8502"/>
-  <node id="5102" lat="21.0338" lon="105.8502"/>
-  <node id="5103" lat="21.0338" lon="105.8504"/>
-  <node id="5104" lat="21.0336" lon="105.8504"/>
-  <way id="6101">
-    <nd ref="5101"/><nd ref="5102"/><nd ref="5103"/><nd ref="5104"/><nd ref="5101"/>
-    <tag k="building" v="yes"/><tag k="building:levels" v="5"/>
+  <!-- BUILDINGS AT THE FOUR EXTREME CORNERS TO SPAWN VEHICLES -->
+  <!-- SW Corner -->
+  <node id="300" lat="21.0324" lon="105.8494"/>
+  <node id="301" lat="21.0324" lon="105.8493"/>
+  <node id="302" lat="21.0323" lon="105.8493"/>
+  <node id="303" lat="21.0323" lon="105.8494"/>
+  <way id="310">
+    <nd ref="300"/><nd ref="301"/><nd ref="302"/><nd ref="303"/><nd ref="300"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- SE Corner -->
+  <node id="400" lat="21.0324" lon="105.8506"/>
+  <node id="401" lat="21.0324" lon="105.8507"/>
+  <node id="402" lat="21.0323" lon="105.8507"/>
+  <node id="403" lat="21.0323" lon="105.8506"/>
+  <way id="410">
+    <nd ref="400"/><nd ref="401"/><nd ref="402"/><nd ref="403"/><nd ref="400"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- NW Corner -->
+  <node id="500" lat="21.0336" lon="105.8494"/>
+  <node id="501" lat="21.0336" lon="105.8493"/>
+  <node id="502" lat="21.0337" lon="105.8493"/>
+  <node id="503" lat="21.0337" lon="105.8494"/>
+  <way id="510">
+    <nd ref="500"/><nd ref="501"/><nd ref="502"/><nd ref="503"/><nd ref="500"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- NE Corner -->
+  <node id="600" lat="21.0336" lon="105.8506"/>
+  <node id="601" lat="21.0336" lon="105.8507"/>
+  <node id="602" lat="21.0337" lon="105.8507"/>
+  <node id="603" lat="21.0337" lon="105.8506"/>
+  <way id="610">
+    <nd ref="600"/><nd ref="601"/><nd ref="602"/><nd ref="603"/><nd ref="600"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="3"/>
   </way>
 </osm>

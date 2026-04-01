@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace OSMImporter
@@ -83,6 +84,14 @@ namespace OSMImporter
             scaler.screenMatchMode      = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
             scaler.matchWidthOrHeight   = 0.5f;
             canvasGO.AddComponent<GraphicRaycaster>();
+
+            // Ensure EventSystem exists so UI clicks/input work
+            if (FindFirstObjectByType<EventSystem>() == null)
+            {
+                var esGO = new GameObject("EventSystem");
+                esGO.AddComponent<EventSystem>();
+                esGO.AddComponent<StandaloneInputModule>();
+            }
 
             // ── Toggle button (☰) ─────────────────────────────────────────────
             BuildToggleButton(canvasGO.transform);

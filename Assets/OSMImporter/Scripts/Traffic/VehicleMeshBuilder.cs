@@ -181,23 +181,23 @@ namespace OSMImporter.Traffic
                 case VehicleType.Bus:
                     return new VehicleParams
                     {
-                        L = 14f, W = 4f, ChassisH = 2.0f,
-                        CabinH = 2.5f, CabinL = 13f, CabinZ = 0f,
-                        WheelR = 1.0f,  WheelT = 0.7f
+                        L = 2.5f, W = 0.62f, ChassisH = 0.37f,
+                        CabinH = 0.45f, CabinL = 2.25f, CabinZ = 0f,
+                        WheelR = 0.15f,  WheelT = 0.1f
                     };
                 case VehicleType.Motorbike:
                     return new VehicleParams
                     {
-                        L = 4f,  W = 1.4f, ChassisH = 0.8f,
-                        CabinH = 1.0f, CabinL = 1.2f, CabinZ = 0.3f,
-                        WheelR = 0.6f,  WheelT = 0.35f
+                        L = 0.55f,  W = 0.2f, ChassisH = 0.15f,
+                        CabinH = 0.2f, CabinL = 0.2f, CabinZ = 0.075f,
+                        WheelR = 0.1f,  WheelT = 0.05f
                     };
                 default: // Car
                     return new VehicleParams
                     {
-                        L = 7f,  W = 3.2f, ChassisH = 1.2f,
-                        CabinH = 1.2f, CabinL = 3.5f, CabinZ = 0.3f,
-                        WheelR = 0.75f, WheelT = 0.55f
+                        L = 1.1f,  W = 0.45f, ChassisH = 0.2f,
+                        CabinH = 0.2f, CabinL = 0.55f, CabinZ = 0.05f,
+                        WheelR = 0.11f, WheelT = 0.075f
                     };
             }
         }

@@ -6,6 +6,8 @@ using OSMImporter.Data;
 using OSMImporter.Generators;
 using OSMImporter.Navigation;
 using OSMImporter.Traffic;
+using Unity.AI.Navigation;
+using UnityEngine.AI;
 
 namespace OSMImporter.Editor
 {
@@ -53,10 +55,12 @@ namespace OSMImporter.Editor
         private float  _scale = 1f;
         private float  _roadWidthMultiplier = 1f;
         private bool   _generateRoads = true, _generateBuildings = true, _generateWaypoints = true;
+        private bool   _generateWater = true, _generateDecorations = true;
         private bool   _generateGround = true;
         private float  _buildingMinHeight = 6f, _buildingMaxHeight = 20f;
         private Color  _roadColor     = new Color(0.2f, 0.2f, 0.2f, 1f);
         private Color  _buildingColor = new Color(0.7f, 0.7f, 0.65f, 1f);
+        private Color  _waterColor    = new Color(0.3f, 0.6f, 0.8f, 1f);
         private Color  _groundColor   = new Color(0.35f, 0.48f, 0.35f, 1f);
 
         // ── Label settings ────────────────────────────────────────────────────
@@ -216,6 +220,8 @@ namespace OSMImporter.Editor
             GUILayout.Space(4);
             _generateRoads     = EditorGUILayout.Toggle("Generate Roads",     _generateRoads);
             _generateBuildings = EditorGUILayout.Toggle("Generate Buildings", _generateBuildings);
+            _generateWater     = EditorGUILayout.Toggle("Generate Water",     _generateWater);
+            _generateDecorations= EditorGUILayout.Toggle("Generate Decorations", _generateDecorations);
             _generateWaypoints = EditorGUILayout.Toggle("Generate Waypoints", _generateWaypoints);
             _generateLabels    = EditorGUILayout.Toggle("Generate Labels",    _generateLabels);
             _generateGround    = EditorGUILayout.Toggle("Generate Ground Plane", _generateGround);
@@ -233,6 +239,7 @@ namespace OSMImporter.Editor
             EditorGUILayout.LabelField("Colors", EditorStyles.boldLabel);
             _roadColor     = EditorGUILayout.ColorField("Road Color",     _roadColor);
             _buildingColor = EditorGUILayout.ColorField("Building Color", _buildingColor);
+            _waterColor    = EditorGUILayout.ColorField("Water Color",    _waterColor);
             if (_generateGround)
                 _groundColor = EditorGUILayout.ColorField("Ground Color", _groundColor);
 
@@ -383,6 +390,10 @@ namespace OSMImporter.Editor
                     return;
                 }
 
+                Debug.Log($"[OSM Import] Parsed: {mapData.Nodes.Count} nodes, {mapData.Ways.Count} ways");
+                Debug.Log($"[OSM Import] Water bodies: {mapData.GetWaterBodies().Count}, Rivers: {mapData.GetRivers().Count}");
+                Debug.Log($"[OSM Import] Decorations (signals/stops): {mapData.GetDecorations().Count}");
+
                 ClearGenerated();
                 _generatedRoot = new GameObject("OSM_Map");
                 Undo.RegisterCreatedObjectUndo(_generatedRoot, "Generate OSM Map");
@@ -403,6 +414,22 @@ namespace OSMImporter.Editor
                     BuildingGenerator.Generate(mapData, p.transform, CreateMaterial("OSM_Building", _buildingColor), _scale, _buildingMinHeight, _buildingMaxHeight);
                 }
 
+                if (_generateWater)
+                {
+                    EditorUtility.DisplayProgressBar("OSM Import", "Generating water...", 0.70f);
+                    var p = new GameObject("Water");
+                    p.transform.SetParent(_generatedRoot.transform, false);
+                    WaterGenerator.Generate(mapData, p.transform, CreateMaterial("OSM_Water", _waterColor), _scale);
+                }
+
+                if (_generateDecorations)
+                {
+                    EditorUtility.DisplayProgressBar("OSM Import", "Generating decorations...", 0.75f);
+                    var p = new GameObject("Decorations");
+                    p.transform.SetParent(_generatedRoot.transform, false);
+                    DecorationGenerator.Generate(mapData, p.transform, _scale);
+                }
+
                 if (_generateWaypoints)
                 {
                     EditorUtility.DisplayProgressBar("OSM Import", "Building waypoint graph...", 0.85f);
@@ -410,10 +437,15 @@ namespace OSMImporter.Editor
                     p.transform.SetParent(_generatedRoot.transform, false);
                     var graph = p.AddComponent<WaypointGraph>();
                     graph.BuildFromOSM(mapData, _scale);
-                    // Persist data so it survives entering Play mode
                     graph.SaveToEntries();
                     UnityEditor.EditorUtility.SetDirty(p);
                 }
+
+                EditorUtility.DisplayProgressBar("OSM Import", "Baking NavMesh Area...", 0.90f);
+                var navSurface = _generatedRoot.AddComponent<NavMeshSurface>();
+                navSurface.collectObjects = CollectObjects.Children;
+                navSurface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+                navSurface.BuildNavMesh();
 
                 if (_generateLabels)
                 {
@@ -506,7 +538,7 @@ namespace OSMImporter.Editor
             go.transform.localScale       = new Vector3(width, depth, 1f);
 
             // Remove collider — it's purely cosmetic
-            Object.DestroyImmediate(go.GetComponent<MeshCollider>());
+            Object.DestroyImmediate(go.GetComponent<Collider>());
 
             // Apply ground material
             var mat = CreateMaterial("OSM_Ground", _groundColor);

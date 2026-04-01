@@ -1,7 +1,9 @@
 {
     "name": "OSMImporter.Runtime",
     "rootNamespace": "OSMImporter",
-    "references": [],
+    "references": [
+        "Unity.AI.Navigation"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

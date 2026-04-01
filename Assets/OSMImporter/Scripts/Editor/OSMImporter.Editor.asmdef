@@ -2,7 +2,9 @@
     "name": "OSMImporter.Editor",
     "rootNamespace": "OSMImporter.Editor",
     "references": [
-        "OSMImporter.Runtime"
+        "OSMImporter.Runtime",
+        "Unity.AI.Navigation",
+        "Unity.AI.Navigation.Editor"
     ],
     "includePlatforms": [
         "Editor"
