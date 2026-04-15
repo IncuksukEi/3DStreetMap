@@ -32,6 +32,11 @@ namespace OSMImporter.Navigation
         [System.NonSerialized]
         public Dictionary<long, Waypoint> Waypoints = new Dictionary<long, Waypoint>();
 
+        // ── Congestion tracking (shared across all vehicles) ──
+        // Key = waypoint id, Value = congestion penalty multiplier (1.0 = normal, higher = more congested)
+        [System.NonSerialized]
+        public Dictionary<long, float> CongestionCosts = new Dictionary<long, float>();
+
         // Serialized backing list — survives Play mode
         [SerializeField] private List<WaypointEntry> _entries = new List<WaypointEntry>();
 
@@ -159,23 +164,48 @@ namespace OSMImporter.Navigation
         {
             if (string.IsNullOrEmpty(roadType)) return 1.5f;
             switch(roadType) {
-                case "motorway": return 0.5f;    // Ưu tiên đi đường cao tốc (chi phí thấp)
+                case "motorway": return 0.5f;
                 case "trunk":    return 0.6f;
                 case "primary":  return 0.7f;
                 case "secondary":return 0.9f;
                 case "tertiary": return 1.0f;
-                case "residential": return 1.8f; // Tránh đi đường nhỏ khu dân cư
+                case "residential": return 1.8f;
                 case "living_street": return 2.5f;
                 default: return 1.2f;
             }
         }
 
+        // Độ ưu tiên đường (số cao = đường lớn hơn)
+        private static int GetRoadPriority(string roadType)
+        {
+            if (string.IsNullOrEmpty(roadType)) return 2;
+            switch(roadType) {
+                case "motorway":      return 7;
+                case "trunk":         return 6;
+                case "primary":       return 5;
+                case "secondary":     return 4;
+                case "tertiary":      return 3;
+                case "residential":   return 1;
+                case "living_street": return 0;
+                default: return 2;
+            }
+        }
+
+        /// <summary>Pathfinding chuẩn (không tính congestion)</summary>
         public List<Waypoint> FindPath(long startId, long endId)
+            => FindPath(startId, endId, false);
+
+        /// <summary>
+        /// A* pathfinding với Google Maps-style rules:
+        /// - Turn Penalty: phạt khi rẽ, cấm U-turn
+        /// - Road Continuity Bonus: ưu tiên ở lại cùng loại đường
+        /// - Congestion avoidance (optional)
+        /// </summary>
+        public List<Waypoint> FindPath(long startId, long endId, bool useCongestion)
         {
             var path = new List<Waypoint>();
             if (!Waypoints.ContainsKey(startId) || !Waypoints.ContainsKey(endId)) return path;
 
-            // Open list: sorted by f-score ascending. Using List + insert to avoid key collision.
             var openList  = new List<(float f, long id)>();
             var cameFrom  = new Dictionary<long, long>();
             var gScore    = new Dictionary<long, float>();
@@ -188,11 +218,10 @@ namespace OSMImporter.Navigation
             int safety = 100000;
             while (openList.Count > 0 && safety-- > 0)
             {
-                // Pop node with lowest f-score
                 long current = openList[0].id;
                 openList.RemoveAt(0);
 
-                if (closedSet.Contains(current)) continue; // skip stale entries
+                if (closedSet.Contains(current)) continue;
                 closedSet.Add(current);
 
                 if (current == endId)
@@ -204,17 +233,67 @@ namespace OSMImporter.Navigation
                 }
 
                 Waypoint currentWp = Waypoints[current];
+
+                // Tính hướng tiếp cận hiện tại (previous → current) cho turn penalty
+                Vector3 approachDir = Vector3.zero;
+                bool hasApproach = false;
+                if (cameFrom.TryGetValue(current, out long prevId) && Waypoints.ContainsKey(prevId))
+                {
+                    approachDir = (currentWp.Position - Waypoints[prevId].Position);
+                    approachDir.y = 0f;
+                    if (approachDir.sqrMagnitude > 0.01f)
+                    {
+                        approachDir.Normalize();
+                        hasApproach = true;
+                    }
+                }
+
                 foreach (long neighborId in currentWp.ConnectedWaypointIds)
                 {
                     if (!Waypoints.ContainsKey(neighborId) || closedSet.Contains(neighborId)) continue;
 
-                    // Tính chi phí bao gồm: Khảng cách vật lý x Trọng số loại đường x Hệ số ngẫu nhiên
-                    // Giúp xe ưu tiên đi đường lớn (tối ưu hơn) và phân tán ra các đường song song (không đi dồn 1 đường duy nhất)
-                    float edgeDist = Vector3.Distance(currentWp.Position, Waypoints[neighborId].Position);
-                    float roadWeight = GetRoadWeight(Waypoints[neighborId].RoadType);
-                    float randomFactor = Random.Range(0.85f, 1.15f); // Noise 15% để tránh tình trạng "quãng đường bằng nhau"
+                    Waypoint neighborWp = Waypoints[neighborId];
+                    float edgeDist = Vector3.Distance(currentWp.Position, neighborWp.Position);
+                    float roadWeight = GetRoadWeight(neighborWp.RoadType);
+                    float randomFactor = Random.Range(0.75f, 1.25f);
                     
-                    float tentativeG = gScore[current] + (edgeDist * roadWeight * randomFactor);
+                    // ── Turn Penalty: phạt khi đổi hướng ──
+                    float turnPenalty = 1f;
+                    if (hasApproach)
+                    {
+                        Vector3 exitDir = (neighborWp.Position - currentWp.Position);
+                        exitDir.y = 0f;
+                        if (exitDir.sqrMagnitude > 0.01f)
+                        {
+                            float turnAngle = Vector3.Angle(approachDir, exitDir.normalized);
+                            if (turnAngle > 150f)
+                                turnPenalty = 5.0f;      // U-turn: gần như cấm
+                            else if (turnAngle > 90f)
+                                turnPenalty = 1.8f;       // Rẽ gắt
+                            else if (turnAngle > 45f)
+                                turnPenalty = 1.3f;       // Rẽ nhẹ
+                            // <= 45° → không phạt (đi thẳng)
+                        }
+                    }
+
+                    // ── Road Continuity: ưu tiên ở lại cùng đường ──
+                    float continuityMult = 1f;
+                    int curPrio = GetRoadPriority(currentWp.RoadType);
+                    int nbrPrio = GetRoadPriority(neighborWp.RoadType);
+                    if (currentWp.RoadType == neighborWp.RoadType)
+                        continuityMult = 0.85f;           // Bonus: cùng đường
+                    else if (nbrPrio > curPrio)
+                        continuityMult = 0.9f;            // Bonus nhẹ: lên đường lớn hơn
+                    else if (nbrPrio < curPrio)
+                        continuityMult = 1.3f;            // Penalty: xuống đường nhỏ hơn
+
+                    // ── Congestion penalty ──
+                    float congestionMult = 1f;
+                    if (useCongestion && CongestionCosts.TryGetValue(neighborId, out float cCost))
+                        congestionMult = cCost;
+
+                    float tentativeG = gScore[current] 
+                        + edgeDist * roadWeight * randomFactor * turnPenalty * continuityMult * congestionMult;
                     
                     if (!gScore.TryGetValue(neighborId, out float existingG)) existingG = float.MaxValue;
 
@@ -223,9 +302,7 @@ namespace OSMImporter.Navigation
                         cameFrom[neighborId] = current;
                         gScore[neighborId]   = tentativeG;
                         
-                        // Heuristic sử dụng đường chim bay (gạch nối thẳng) nhân với trọng số tối ưu nhất để đảm bảo thuật toán admissible
-                        float f = tentativeG + (Vector3.Distance(Waypoints[neighborId].Position, Waypoints[endId].Position) * 0.5f);
-                        // Binary-search insert to keep list sorted
+                        float f = tentativeG + (Vector3.Distance(neighborWp.Position, Waypoints[endId].Position) * 0.5f);
                         int idx = openList.BinarySearch((f, neighborId),
                             Comparer<(float f, long id)>.Create((a, b) => a.f.CompareTo(b.f)));
                         if (idx < 0) idx = ~idx;

@@ -106,6 +106,11 @@ namespace OSMImporter.Traffic
                 tlm.Graph = Graph;
             }
 
+            // Auto-attach VehicleInspector vào Main Camera để click xem xe
+            Camera mainCam = Camera.main;
+            if (mainCam != null && mainCam.GetComponent<VehicleInspector>() == null)
+                mainCam.gameObject.AddComponent<VehicleInspector>();
+
             if (ContinuousSpawning)
             {
                 StartCoroutine(SpawnRoutine());
@@ -166,6 +171,8 @@ namespace OSMImporter.Traffic
             for (int i = 0; i < count; i++)
             {
                 Waypoint wp = PickSpawnWaypoint();
+                if (wp == null) continue;
+
                 Color color = palette[Random.Range(0, palette.Length)];
 
                 GameObject vehicleGO = VehicleMeshBuilder.Build(type, color);
@@ -221,41 +228,69 @@ namespace OSMImporter.Traffic
         {
             var list = new List<Waypoint>(Graph.Waypoints.Values);
             
-            for (int attempt = 0; attempt < 20; attempt++)
+            // Shuffle list để mỗi lần gọi ra thứ tự khác nhau, tránh bias clustering
+            for (int i = list.Count - 1; i > 0; i--)
+            {
+                int j = Random.Range(0, i + 1);
+                (list[i], list[j]) = (list[j], list[i]);
+            }
+            
+            // Giảm safe distance khi xe đông để vẫn spawn được
+            float safeDist = _agents.Count < MaxActiveVehicles * 0.5f ? 10f : 6f;
+            
+            for (int attempt = 0; attempt < 60; attempt++)
             {
                 Waypoint wp = null;
                 
-                // Ưu tiên spawn từ rìa map (edge nodes) — xe xuất hiện tự nhiên từ ngoài vào
-                if (EdgeNodes.Count > 0 && Random.value < 0.85f)
+                // Phân bổ spawn đa dạng: 25% Rìa, 25% Toà nhà, 50% Ngẫu nhiên trên đường
+                float randVal = Random.value;
+                if (EdgeNodes.Count > 0 && randVal < 0.25f)
                 {
                     wp = EdgeNodes[Random.Range(0, EdgeNodes.Count)];
                 }
-                else if (Buildings != null && Buildings.Count > 0)
+                else if (Buildings != null && Buildings.Count > 0 && randVal < 0.50f)
                 {
                     Transform bldg = Buildings[Random.Range(0, Buildings.Count)];
                     wp = Graph.FindNearest(bldg.position);
                 }
                 else
                 {
-                    wp = list[Random.Range(0, list.Count)];
+                    // Random waypoint từ list đã shuffle
+                    wp = list[attempt % list.Count];
                 }
 
                 if (wp == null) continue;
                 
-                // Kiểm tra không spawn chồng lên xe khác
+                // Không spawn ở ngã tư, có đèn giao thông, hoặc khu vực đang bị tắc nghẽn
+                if (wp.ConnectedWaypointIds.Count > 2 || wp.IsTrafficLight) continue;
+                if (Graph.CongestionCosts != null && Graph.CongestionCosts.ContainsKey(wp.OSMNodeId)) continue;
+                
+                // Kiểm tra khoảng cách an toàn với xe đã có (dynamic theo mật độ)
                 bool tooClose = false;
                 foreach (var a in _agents)
                 {
-                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < 8f)
+                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < safeDist)
                     { tooClose = true; break; }
                 }
                 if (!tooClose) return wp;
             }
             
-            // Fallback: chọn edge node bất kỳ
-            if (EdgeNodes.Count > 0)
-                return EdgeNodes[Random.Range(0, EdgeNodes.Count)];
-            return list[Random.Range(0, list.Count)];
+            // Fallback: chấp nhận bất kỳ waypoint hợp lệ nào (giảm safe dist xuống 3m)
+            for (int i = 0; i < 20; i++)
+            {
+                Waypoint wp = list[Random.Range(0, list.Count)];
+                if (wp.ConnectedWaypointIds.Count > 2 || wp.IsTrafficLight) continue;
+                
+                bool tooClose = false;
+                foreach (var a in _agents)
+                {
+                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < 3f)
+                    { tooClose = true; break; }
+                }
+                if (!tooClose) return wp;
+            }
+            
+            return null;
         }
 
         private static Transform[] FindWheels(Transform root)
@@ -307,6 +342,8 @@ namespace OSMImporter.Traffic
         private GUIStyle _titleStyle;
         private GUIStyle _statStyle;
         private GUIStyle _sliderLabelStyle;
+        private GUIStyle _warningStyle;
+        private GUIStyle _collisionStyle;
 
         private void OnGUI()
         {
@@ -328,11 +365,48 @@ namespace OSMImporter.Traffic
                     fontSize = 11,
                     normal   = { textColor = new Color(0.9f, 0.9f, 0.7f) }
                 };
+                _warningStyle = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 13,
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleCenter,
+                    normal   = { textColor = new Color(1f, 0.64f, 0f) } // Orange cho tắc
+                };
+                _collisionStyle = new GUIStyle(GUI.skin.label)
+                {
+                    fontSize = 14,
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleCenter,
+                    normal   = { textColor = Color.red } // Red cho va chạm
+                };
             }
 
             const float panW = 220f, pad = 10f;
             float startX = Screen.width - panW - pad;
             float startY = pad;
+
+            // Vẽ cảnh báo Tắc Đường / Va Chạm trên đầu các xe gặp sự cố
+            Camera cam = Camera.main;
+            if (cam != null)
+            {
+                foreach (var a in _agents)
+                {
+                    if (a == null) continue;
+                    
+                    if (a.IsColliding || a.IsStuck)
+                    {
+                        Vector3 screenPos = cam.WorldToScreenPoint(a.transform.position + Vector3.up * 3f);
+                        if (screenPos.z > 0 && screenPos.z < 250f) 
+                        {
+                            Rect rect = new Rect(screenPos.x - 40, Screen.height - screenPos.y - 15, 80, 30);
+                            if (a.IsColliding)
+                                GUI.Label(rect, "[Va Chạm]", _collisionStyle);
+                            else
+                                GUI.Label(rect, "[Tắc Nghẽn]", _warningStyle);
+                        }
+                    }
+                }
+            }
 
             // Nút toggle ẩn/hiện panel
             if (GUI.Button(new Rect(startX + panW - 25, startY, 25, 20), _panelOpen ? "▼" : "▶"))
@@ -345,7 +419,7 @@ namespace OSMImporter.Traffic
                 return;
             }
 
-            float panH = 170f;
+            float panH = 195f;
             GUI.Box(new Rect(startX, startY, panW, panH), "");
 
             float y = startY + 5;
@@ -378,6 +452,15 @@ namespace OSMImporter.Traffic
             y += 16;
             SpeedScale = GUI.HorizontalSlider(
                 new Rect(startX + 8, y, labelW, 16), SpeedScale, 0.1f, 5f);
+            y += 22;
+
+            if (TrafficLightManager.Instance != null)
+            {
+                GUI.Label(new Rect(startX + 8, y, labelW - 20, 16), "Traffic Lights", _statStyle);
+                TrafficLightManager.Instance.EnableTrafficLights = GUI.Toggle(
+                    new Rect(startX + panW - 25, y, 20, 16), 
+                    TrafficLightManager.Instance.EnableTrafficLights, "");
+            }
         }
     }
 }

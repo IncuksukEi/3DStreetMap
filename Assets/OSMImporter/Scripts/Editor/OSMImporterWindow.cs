@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEditor;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using OSMImporter.Data;
@@ -50,6 +51,10 @@ namespace OSMImporter.Editor
                     _osmFilePath = sample;
             }
         }
+
+        // ── MS Building Footprints ────────────────────────────────────────────
+        private bool   _useMSBuildings = true;
+        private double _lastMinLat, _lastMinLon, _lastMaxLat, _lastMaxLon;
 
         // ── Shared settings ───────────────────────────────────────────────────
         private float  _scale = 1f;
@@ -180,8 +185,9 @@ namespace OSMImporter.Editor
             EditorGUILayout.LabelField("Quick Presets", EditorStyles.boldLabel);
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Hanoi Center")) SetCenter(21.0285, 105.8542);
-            if (GUILayout.Button("Ho Chi Minh")) SetCenter(10.7769, 106.7009);
-            if (GUILayout.Button("Da Nang"))     SetCenter(16.0544, 108.2022);
+            if (GUILayout.Button("Bách Khoa HN")) SetCenter(21.0048, 105.8455);
+            if (GUILayout.Button("Ho Chi Minh"))   SetCenter(10.7769, 106.7009);
+            if (GUILayout.Button("Da Nang"))       SetCenter(16.0544, 108.2022);
             EditorGUILayout.EndHorizontal();
         }
 
@@ -225,6 +231,18 @@ namespace OSMImporter.Editor
             _generateWaypoints = EditorGUILayout.Toggle("Generate Waypoints", _generateWaypoints);
             _generateLabels    = EditorGUILayout.Toggle("Generate Labels",    _generateLabels);
             _generateGround    = EditorGUILayout.Toggle("Generate Ground Plane", _generateGround);
+
+            GUILayout.Space(4);
+            _useMSBuildings = EditorGUILayout.Toggle("🏘 MS Building Footprints", _useMSBuildings);
+            if (_useMSBuildings)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "Bổ sung nhà nhỏ từ Microsoft AI Building Footprints.\n" +
+                    "Dữ liệu vệ tinh AI phủ toàn bộ VN, bao gồm nhà dân/nhà ống.",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
 
             if (_generateBuildings)
             {
@@ -319,10 +337,22 @@ namespace OSMImporter.Editor
         {
             if (_activeTab == Tab.File)
             {
-                EditorGUI.BeginDisabledGroup(string.IsNullOrEmpty(_osmFilePath));
-                if (GUILayout.Button("Generate", GUILayout.Height(38)))
-                    GenerateFromFile(_osmFilePath);
+                EditorGUI.BeginDisabledGroup(string.IsNullOrEmpty(_osmFilePath) || _isDownloading);
+                if (GUILayout.Button(_isDownloading ? "⏳  Loading MS Buildings..." : "Generate", GUILayout.Height(38)))
+                {
+                    if (_useMSBuildings)
+                        _ = GenerateFromFileAsync(_osmFilePath);
+                    else
+                        GenerateFromFile(_osmFilePath);
+                }
                 EditorGUI.EndDisabledGroup();
+
+                // Hiện trạng thái download MS Buildings
+                if (_isDownloading)
+                {
+                    EditorGUILayout.HelpBox(_downloadStatus, MessageType.None);
+                    Repaint();
+                }
             }
 
             GUILayout.Space(4);
@@ -344,6 +374,9 @@ namespace OSMImporter.Editor
             else
                 (mn, mw, mx, me) = (_minLat, _minLon, _maxLat, _maxLon);
 
+            // Lưu bbox cho MS Buildings
+            _lastMinLat = mn; _lastMinLon = mw; _lastMaxLat = mx; _lastMaxLon = me;
+
             string filePath = await OSMDownloader.DownloadAsync(
                 mn, mw, mx, me,
                 progress =>
@@ -363,14 +396,60 @@ namespace OSMImporter.Editor
             if (filePath != null)
             {
                 _downloadStatus = $"✔ Downloaded → {Path.GetFileName(filePath)}";
-                GenerateFromFile(filePath);
+
+                // Download MS Buildings nếu bật
+                List<BuildingFootprint> msBuildings = null;
+                if (_useMSBuildings)
+                {
+                    _downloadStatus = "Downloading Microsoft Building Footprints...";
+                    Repaint();
+                    msBuildings = await MSBuildingDownloader.DownloadBuildingsForBBox(
+                        mn, mw, mx, me,
+                        progress => { _downloadStatus = progress; Repaint(); },
+                        error => { Debug.LogWarning($"[MS Buildings] {error}"); });
+                    _downloadStatus = $"✔ MS Buildings: {msBuildings?.Count ?? 0} footprints";
+                    Repaint();
+                }
+
+                GenerateFromFile(filePath, msBuildings);
             }
 
             Repaint();
         }
 
+        // ── Generate from File + MS Buildings ──────────────────────────────────
+        private async Task GenerateFromFileAsync(string filePath)
+        {
+            if (!File.Exists(filePath)) { Debug.LogError($"File not found: {filePath}"); return; }
+
+            _isDownloading  = true;
+            _downloadFailed = false;
+            _downloadStatus = "Parsing .osm file for bounding box...";
+            Repaint();
+
+            // Parse file để lấy bbox
+            var tempData = OSMParser.Parse(filePath);
+            double mn = tempData.Bounds.MinLat, mw = tempData.Bounds.MinLon;
+            double mx = tempData.Bounds.MaxLat, me = tempData.Bounds.MaxLon;
+
+            // Download MS Buildings
+            List<BuildingFootprint> msBuildings = null;
+            _downloadStatus = "Downloading Microsoft Building Footprints...";
+            Repaint();
+            msBuildings = await MSBuildingDownloader.DownloadBuildingsForBBox(
+                mn, mw, mx, me,
+                progress => { _downloadStatus = progress; Repaint(); },
+                error    => { Debug.LogWarning($"[MS Buildings] {error}"); });
+            _downloadStatus = $"✔ MS Buildings: {msBuildings?.Count ?? 0} footprints";
+
+            _isDownloading = false;
+            Repaint();
+
+            GenerateFromFile(filePath, msBuildings);
+        }
+
         // ── Generate from a file path ─────────────────────────────────────────
-        private void GenerateFromFile(string filePath)
+        private void GenerateFromFile(string filePath, List<BuildingFootprint> msBuildings = null)
         {
             if (!File.Exists(filePath))
             {
@@ -408,6 +487,14 @@ namespace OSMImporter.Editor
 
                 if (_generateBuildings)
                 {
+                    // Merge MS Building Footprints vào mapData trước khi sinh mesh
+                    if (msBuildings != null && msBuildings.Count > 0)
+                    {
+                        EditorUtility.DisplayProgressBar("OSM Import", $"Merging {msBuildings.Count} MS Buildings...", 0.55f);
+                        MergeMSBuildings(mapData, msBuildings);
+                        Debug.Log($"[OSM Import] Merged {msBuildings.Count} MS Building Footprints");
+                    }
+
                     EditorUtility.DisplayProgressBar("OSM Import", "Generating buildings...", 0.65f);
                     var p = new GameObject("Buildings");
                     p.transform.SetParent(_generatedRoot.transform, false);
@@ -577,6 +664,90 @@ namespace OSMImporter.Editor
             AssetDatabase.CreateAsset(mat, path);
             AssetDatabase.SaveAssets();
             return mat;
+        }
+
+        /// <summary>
+        /// Merge Microsoft Building Footprints vào OSMMapData.
+        /// Skip footprint trùng với OSM building có sẵn (de-duplicate).
+        /// </summary>
+        private void MergeMSBuildings(OSMMapData mapData, List<BuildingFootprint> msBuildings)
+        {
+            // Tính centroid của tất cả OSM buildings hiện có để de-duplicate
+            var existingCentroids = new List<Vector2>();
+            foreach (var way in mapData.GetBuildings())
+            {
+                double cx = 0, cy = 0;
+                int count = 0;
+                foreach (var nodeId in way.NodeRefs)
+                {
+                    if (mapData.Nodes.TryGetValue(nodeId, out var n))
+                    {
+                        cx += n.Latitude;
+                        cy += n.Longitude;
+                        count++;
+                    }
+                }
+                if (count > 0)
+                    existingCentroids.Add(new Vector2((float)(cx / count), (float)(cy / count)));
+            }
+
+            long nextId = 9_000_000_000L; // ID range cho MS buildings (tránh trùng OSM)
+            int merged = 0;
+
+            foreach (var fp in msBuildings)
+            {
+                if (fp.Coordinates == null || fp.Coordinates.Count < 3) continue;
+
+                // Tính centroid của MS footprint
+                double fpCx = 0, fpCy = 0;
+                foreach (var coord in fp.Coordinates) { fpCx += coord[0]; fpCy += coord[1]; }
+                fpCx /= fp.Coordinates.Count;
+                fpCy /= fp.Coordinates.Count;
+
+                // De-duplicate: skip nếu centroid quá gần 1 OSM building (~15m)
+                bool duplicate = false;
+                float threshold = 0.00015f; // ~15m tại Hà Nội
+                foreach (var ec in existingCentroids)
+                {
+                    if (Mathf.Abs(ec.x - (float)fpCx) < threshold && Mathf.Abs(ec.y - (float)fpCy) < threshold)
+                    {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) continue;
+
+                // Tạo nodes cho footprint
+                var way = new Data.OSMWay { Id = nextId++ };
+                way.Tags["building"] = "yes";
+                way.Tags["source"] = "Microsoft";
+
+                // Ước lượng chiều cao từ diện tích nếu MS không có height
+                if (fp.Height > 0)
+                    way.Tags["building:levels"] = Mathf.Max(1, Mathf.RoundToInt(fp.Height / 3f)).ToString();
+
+                foreach (var coord in fp.Coordinates)
+                {
+                    long nodeId = nextId++;
+                    var node = new Data.OSMNode
+                    {
+                        Id = nodeId,
+                        Latitude = coord[0],
+                        Longitude = coord[1]
+                    };
+                    mapData.Nodes[nodeId] = node;
+                    way.NodeRefs.Add(nodeId);
+                }
+
+                // Close polygon
+                if (way.NodeRefs.Count > 0 && way.NodeRefs[0] != way.NodeRefs[way.NodeRefs.Count - 1])
+                    way.NodeRefs.Add(way.NodeRefs[0]);
+
+                mapData.Ways.Add(way);
+                merged++;
+            }
+
+            Debug.Log($"[MS Buildings] Merged {merged} new buildings (skipped {msBuildings.Count - merged} duplicates)");
         }
     }
 }

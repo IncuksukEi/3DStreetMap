@@ -19,7 +19,7 @@ namespace OSMImporter.Editor
         {
             "https://overpass-api.de/api/interpreter",
             "https://overpass.kumi.systems/api/interpreter",
-            "https://overpass.openstreetmap.ru/api/interpreter"
+            "https://lz4.overpass-api.de/api/interpreter"
         };
 
         private static int _endpointIndex = 0;
@@ -38,6 +38,8 @@ namespace OSMImporter.Editor
             string tempPath = Path.Combine(
                 Application.temporaryCachePath,
                 $"osm_download_{DateTime.Now:yyyyMMdd_HHmmss}.osm");
+
+            Exception lastException = null;
 
             for (int attempt = 0; attempt < OverpassEndpoints.Length; attempt++)
             {
@@ -81,18 +83,16 @@ namespace OSMImporter.Editor
                     onProgress?.Invoke($"Download complete! Saved to {tempPath}");
                     return tempPath;
                 }
-                catch (WebException wex) when (attempt < OverpassEndpoints.Length - 1)
-                {
-                    onProgress?.Invoke($"Endpoint {endpoint} failed ({wex.Message}), trying next...");
-                }
                 catch (Exception ex)
                 {
-                    onError?.Invoke($"Download failed: {ex.Message}");
-                    return null;
+                    lastException = ex;
+                    // Retry với endpoint tiếp theo nếu còn
+                    if (attempt < OverpassEndpoints.Length - 1)
+                        onProgress?.Invoke($"Endpoint {endpoint} failed ({ex.Message}), trying next...");
                 }
             }
 
-            onError?.Invoke("All Overpass API endpoints failed. Check your internet connection.");
+            onError?.Invoke($"All Overpass API endpoints failed: {lastException?.Message ?? "Unknown error"}. Check your internet connection.");
             return null;
         }
 
