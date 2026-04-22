@@ -36,6 +36,9 @@ namespace OSMImporter.Traffic.NativeSumo.Graph
         public List<SLane> lanes = new List<SLane>();
         public float length;
         public float maxSpeed;
+        
+        // Danh sách các edge kế tiếp tại junction (từ connection trong .net.xml)
+        public List<SEdge> successors = new List<SEdge>();
     }
 
     /// <summary>

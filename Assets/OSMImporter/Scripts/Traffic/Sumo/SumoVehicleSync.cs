@@ -11,7 +11,7 @@ namespace OSMImporter.Traffic.Sumo
     {
         // Mapping: SUMO vehicle ID → Unity GameObject
         private readonly Dictionary<string, SumoVehicleInstance> _vehicles = new();
-        private readonly SumoCoordinateMapper _mapper;
+        private readonly SumoToUnityMapper _mapper;
         private readonly Transform _parent;
 
         // Smoothing
@@ -20,7 +20,7 @@ namespace OSMImporter.Traffic.Sumo
 
         public int ActiveVehicleCount => _vehicles.Count;
 
-        public SumoVehicleSync(SumoCoordinateMapper mapper, Transform parent,
+        public SumoVehicleSync(SumoToUnityMapper mapper, Transform parent,
                                 float posLerp = 12f, float rotLerp = 8f)
         {
             _mapper = mapper;
@@ -54,7 +54,7 @@ namespace OSMImporter.Traffic.Sumo
 
                 // Cập nhật target (lerp sẽ smooth trong frame)
                 instance.TargetPosition = _mapper.SumoToUnity(state.Position);
-                instance.TargetRotation = SumoCoordinateMapper.SumoAngleToUnityRotation(state.Angle);
+                instance.TargetRotation = SumoToUnityMapper.SumoAngleToUnityRotation(state.Angle);
                 instance.Speed = state.Speed;
             }
 
@@ -107,7 +107,7 @@ namespace OSMImporter.Traffic.Sumo
             // Set initial position (no lerp)
             Vector3 pos = _mapper.SumoToUnity(state.Position);
             go.transform.position = pos;
-            go.transform.rotation = SumoCoordinateMapper.SumoAngleToUnityRotation(state.Angle);
+            go.transform.rotation = SumoToUnityMapper.SumoAngleToUnityRotation(state.Angle);
 
             // Thu thập wheel transforms
             var wheels = new List<Transform>();

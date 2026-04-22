@@ -7,6 +7,9 @@ using OSMImporter.Data;
 using OSMImporter.Generators;
 using OSMImporter.Navigation;
 using OSMImporter.Traffic;
+using OSMImporter.Traffic.NativeSumo;
+using OSMImporter.Traffic.NativeSumo.Graph;
+using OSMImporter.Traffic.Sumo;
 using Unity.AI.Navigation;
 using UnityEngine.AI;
 
@@ -80,6 +83,13 @@ namespace OSMImporter.Editor
         private int   _motoCount         = 12;
         private int   _busCount          = 2;
         private float _trafficSpeedScale = 1f;
+
+        // ── SUMO Native Traffic ──────────────────────────────────────────────
+        private bool   _useSumoNative    = true;
+        private enum SumoSource { AutoFromOSM, ManualFile }
+        private SumoSource _sumoSource    = SumoSource.AutoFromOSM;
+        private string _sumoNetFilePath  = "";
+        private string _sumoRouFilePath  = "";
 
         // ── Runtime ───────────────────────────────────────────────────────────
         private GameObject _generatedRoot;
@@ -279,6 +289,61 @@ namespace OSMImporter.Editor
             _motoCount         = EditorGUILayout.IntSlider("🚴  Motorbikes",  _motoCount,         0, 80);
             _busCount          = EditorGUILayout.IntSlider("🚌  Buses",       _busCount,          0, 10);
             _trafficSpeedScale = EditorGUILayout.Slider("Speed ×",            _trafficSpeedScale, 0.1f, 5f);
+
+            GUILayout.Space(6);
+            _useSumoNative = EditorGUILayout.Toggle("🚦 SUMO Native Simulation", _useSumoNative);
+            if (_useSumoNative)
+            {
+                EditorGUI.indentLevel++;
+
+                // Download tab → luôn auto, File tab → cho chọn source
+                if (_activeTab == Tab.Download)
+                {
+                    _sumoSource = SumoSource.AutoFromOSM;
+                    EditorGUILayout.HelpBox(
+                        "Krauss car-following + LC2013 lane-changing.\n" +
+                        "Mạng lưới SUMO sẽ được tự động tạo từ dữ liệu OSM API — không cần file .net.xml.",
+                        MessageType.Info);
+                }
+                else
+                {
+                    _sumoSource = (SumoSource)EditorGUILayout.EnumPopup("SUMO Source", _sumoSource);
+
+                    if (_sumoSource == SumoSource.AutoFromOSM)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Tự convert mạng lưới SUMO từ dữ liệu .osm đã load — không cần file .net.xml.",
+                            MessageType.Info);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Load mạng lưới từ file .net.xml — chính xác nhất (dùng netconvert output).",
+                            MessageType.Info);
+
+                        EditorGUILayout.BeginHorizontal();
+                        _sumoNetFilePath = EditorGUILayout.TextField("SUMO .net.xml:", _sumoNetFilePath);
+                        if (GUILayout.Button("...", GUILayout.Width(30)))
+                        {
+                            string p = EditorUtility.OpenFilePanel("Select SUMO Network", Application.dataPath, "xml");
+                            if (!string.IsNullOrEmpty(p)) _sumoNetFilePath = p;
+                        }
+                        EditorGUILayout.EndHorizontal();
+
+                        EditorGUILayout.BeginHorizontal();
+                        _sumoRouFilePath = EditorGUILayout.TextField("SUMO .rou.xml:", _sumoRouFilePath);
+                        if (GUILayout.Button("...", GUILayout.Width(30)))
+                        {
+                            string p = EditorUtility.OpenFilePanel("Select SUMO Routes", Application.dataPath, "xml");
+                            if (!string.IsNullOrEmpty(p)) _sumoRouFilePath = p;
+                        }
+                        EditorGUILayout.EndHorizontal();
+                    }
+                }
+
+                EditorGUI.indentLevel--;
+            }
+
             EditorGUI.indentLevel--;
         }
 
@@ -583,6 +648,52 @@ namespace OSMImporter.Editor
                     spawner.BusCount     = _busCount;
                     spawner.SpeedScale   = _trafficSpeedScale;
                     Debug.Log($"[OSM] TrafficSpawner added — {_carCount} cars, {_motoCount} motos, {_busCount} buses. Press Play to start traffic.");
+
+                    // SUMO Native Integration
+                    if (_useSumoNative)
+                    {
+                        SNetwork sumoNetwork = null;
+                        string sourceDesc = "";
+
+                        if (_sumoSource == SumoSource.ManualFile
+                            && !string.IsNullOrEmpty(_sumoNetFilePath)
+                            && File.Exists(_sumoNetFilePath))
+                        {
+                            // ManualFile: load từ .net.xml
+                            EditorUtility.DisplayProgressBar("OSM Import", "Loading SUMO network from .net.xml...", 0.98f);
+                            var mapper = new SumoToUnityMapper(
+                                _sumoNetFilePath,
+                                mapData.Bounds.CenterLat,
+                                mapData.Bounds.CenterLon,
+                                _scale);
+                            sumoNetwork = NetParser.Load(_sumoNetFilePath, mapper);
+                            sourceDesc = $".net.xml ({sumoNetwork?.Edges.Count ?? 0} edges)";
+                        }
+                        else
+                        {
+                            // AutoFromOSM: convert trực tiếp từ OSMMapData
+                            EditorUtility.DisplayProgressBar("OSM Import", "Converting OSM → SUMO network (full geometry)...", 0.98f);
+                            sumoNetwork = OSMToSumoConverter.ConvertFromOSMData(mapData, _scale);
+                            if (sumoNetwork != null && sumoNetwork.Edges.Count > 0)
+                                sourceDesc = $"OSM API → auto ({sumoNetwork.Edges.Count} edges)";
+                            else
+                                Debug.LogWarning("[OSM+SUMO] Convert thất bại — kiểm tra dữ liệu OSM có highway không.");
+                        }
+
+                        // Attach SimulationEngine nếu convert thành công
+                        if (sumoNetwork != null && sumoNetwork.Edges.Count > 0)
+                        {
+                            if (GameObject.Find("SUMO_Simulation") is GameObject oldSumo)
+                                Undo.DestroyObjectImmediate(oldSumo);
+
+                            var sumoGO = new GameObject("SUMO_Simulation");
+                            Undo.RegisterCreatedObjectUndo(sumoGO, "Generate SUMO Simulation");
+                            var engine = sumoGO.AddComponent<SimulationEngine>();
+                            engine.network = sumoNetwork;
+
+                            Debug.Log($"[OSM+SUMO] ✅ SimulationEngine ready — source: {sourceDesc}. Press Play to run traffic.");
+                        }
+                    }
                 }
 
                 if (SceneView.lastActiveSceneView != null)
@@ -595,10 +706,12 @@ namespace OSMImporter.Editor
         private void ClearGenerated()
         {
             if (_generatedRoot != null) Undo.DestroyObjectImmediate(_generatedRoot);
-            if (GameObject.Find("OSM_Map")        is GameObject e)   Undo.DestroyObjectImmediate(e);
-            if (GameObject.Find("OSM_AreaPanel")  is GameObject ui)  Undo.DestroyObjectImmediate(ui);
-            if (GameObject.Find("OSMAreaRegistry") is GameObject reg) Undo.DestroyObjectImmediate(reg);
-            if (GameObject.Find("OSM_Traffic")    is GameObject tr)  Undo.DestroyObjectImmediate(tr);
+            if (GameObject.Find("OSM_Map")             is GameObject e)    Undo.DestroyObjectImmediate(e);
+            if (GameObject.Find("OSM_AreaPanel")       is GameObject ui)   Undo.DestroyObjectImmediate(ui);
+            if (GameObject.Find("OSMAreaRegistry")     is GameObject reg)  Undo.DestroyObjectImmediate(reg);
+            if (GameObject.Find("OSM_Traffic")         is GameObject tr)   Undo.DestroyObjectImmediate(tr);
+            if (GameObject.Find("SUMO_Simulation")     is GameObject sumo) Undo.DestroyObjectImmediate(sumo);
+            if (GameObject.Find("SUMO_Native_Preview") is GameObject prev) Undo.DestroyObjectImmediate(prev);
         }
 
         /// <summary>

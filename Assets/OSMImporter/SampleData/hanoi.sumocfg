@@ -1,0 +1,14 @@
+<configuration>
+  <input>
+    <net-file value="hanoi.net.xml"/>
+    <route-files value="hanoi.rou.xml"/>
+  </input>
+  <time>
+    <begin value="0"/>
+    <end value="3600"/>
+    <step-length value="0.05"/>
+  </time>
+  <processing>
+    <lateral-resolution value="0.8"/>
+  </processing>
+</configuration>

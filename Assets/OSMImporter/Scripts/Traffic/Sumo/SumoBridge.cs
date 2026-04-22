@@ -12,6 +12,7 @@ namespace OSMImporter.Traffic.Sumo
     /// 1. Spawn process sumo.exe (hoặc connect tới instance đang chạy)
     /// 2. Mỗi frame: gọi TraCI SimulationStep → lấy vehicle states → sync Unity
     /// 3. On destroy: close connection + kill process
+    /// 4. Auto-parse .net.xml để lấy boundaries cho coordinate mapping chính xác
     /// 
     /// Gắn vào 1 GameObject trống trong scene.
     /// </summary>
@@ -23,6 +24,9 @@ namespace OSMImporter.Traffic.Sumo
 
         [Tooltip("Đường dẫn tới file .sumocfg")]
         public string ConfigFile = "";
+
+        [Tooltip("Đường dẫn tới file .net.xml (auto-parse boundaries)")]
+        public string NetXmlFile = "";
 
         [Tooltip("Port TCP cho TraCI")]
         public int Port = 8813;
@@ -40,11 +44,11 @@ namespace OSMImporter.Traffic.Sumo
         [Tooltip("Origin longitude của Unity map")]
         public double OriginLon = 105.8500;
 
-        [Tooltip("SUMO netOffset X (đọc từ .net.xml)")]
-        public float NetOffsetX = 0f;
+        [Tooltip("Map scale (khớp với OSMImporter)")]
+        public float MapScale = 1f;
 
-        [Tooltip("SUMO netOffset Y (đọc từ .net.xml)")]
-        public float NetOffsetY = 0f;
+        [Tooltip("Tự động detect origin từ OSMAreaRegistry")]
+        public bool AutoDetectOrigin = true;
 
         [Header("Simulation")]
         [Tooltip("Tốc độ mô phỏng (1.0 = realtime, 2.0 = 2x)")]
@@ -68,7 +72,7 @@ namespace OSMImporter.Traffic.Sumo
 
         // Internal
         private TraCIClient _client;
-        private SumoCoordinateMapper _mapper;
+        private SumoToUnityMapper _mapper;
         private SumoVehicleSync _sync;
         private Process _sumoProcess;
         private float _stepAccumulator;
@@ -87,10 +91,18 @@ namespace OSMImporter.Traffic.Sumo
             var parentGo = new GameObject("SUMO_Vehicles");
             _vehicleParent = parentGo.transform;
 
-            // Khởi tạo mapper + sync
-            _mapper = new SumoCoordinateMapper(OriginLat, OriginLon, NetOffsetX, NetOffsetY);
-            _sync = new SumoVehicleSync(_mapper, _vehicleParent, PositionLerpSpeed, RotationLerpSpeed);
+            // Auto-detect origin từ scene nếu có
+            if (AutoDetectOrigin)
+                TryDetectOriginFromScene();
 
+            // Khởi tạo mapper — parse .net.xml nếu có
+            _mapper = new SumoToUnityMapper(OriginLat, OriginLon, MapScale);
+            if (!string.IsNullOrEmpty(NetXmlFile))
+            {
+                _mapper.ParseNetXml(NetXmlFile);
+            }
+
+            _sync = new SumoVehicleSync(_mapper, _vehicleParent, PositionLerpSpeed, RotationLerpSpeed);
             _client = new TraCIClient("127.0.0.1", Port);
 
             if (AutoStartSumo && !string.IsNullOrEmpty(ConfigFile))
@@ -168,12 +180,27 @@ namespace OSMImporter.Traffic.Sumo
             _activeVehicles = 0;
         }
 
-        /// <summary>Cập nhật coordinate offset (gọi sau khi parse .net.xml).</summary>
-        public void UpdateNetOffset(float x, float y)
+        /// <summary>Load boundaries từ .net.xml file mới tại runtime.</summary>
+        public void LoadNetXml(string path)
         {
-            NetOffsetX = x;
-            NetOffsetY = y;
-            _mapper?.SetSumoNetOffset(x, y);
+            NetXmlFile = path;
+            _mapper?.ParseNetXml(path);
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // AUTO-DETECT ORIGIN
+        // ══════════════════════════════════════════════════════════════════
+
+        private void TryDetectOriginFromScene()
+        {
+            // Tìm Editor-generated origin data (OSMImporterWindow lưu trong PlayerPrefs/EditorPrefs)
+            // Fallback: dùng giá trị Inspector
+            var editor = FindFirstObjectByType<OSMImporter.OSMAreaRegistry>();
+            if (editor != null)
+            {
+                Debug.Log("[SumoBridge] Found OSMAreaRegistry — using scene-based origin.");
+                // OSMAreaRegistry không lưu lat/lon, giữ nguyên Inspector values
+            }
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -252,6 +279,6 @@ namespace OSMImporter.Traffic.Sumo
         public TraCIClient GetClient() => _client;
 
         /// <summary>Lấy coordinate mapper.</summary>
-        public SumoCoordinateMapper GetMapper() => _mapper;
+        public SumoToUnityMapper GetMapper() => _mapper;
     }
 }

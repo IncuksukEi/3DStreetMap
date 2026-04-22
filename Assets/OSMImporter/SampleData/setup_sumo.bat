@@ -4,8 +4,22 @@ REM  Setup SUMO network from OSM file
 REM  Chạy script này sau khi cài SUMO
 REM ============================================================
 
+REM Auto-detect SUMO_HOME nếu chưa set
+if not defined SUMO_HOME (
+    if exist "C:\Program Files (x86)\Eclipse\Sumo" (
+        set "SUMO_HOME=C:\Program Files (x86)\Eclipse\Sumo"
+    ) else if exist "C:\Program Files\Eclipse\Sumo" (
+        set "SUMO_HOME=C:\Program Files\Eclipse\Sumo"
+    ) else (
+        echo ERROR: SUMO_HOME is not set and SUMO was not found in default paths.
+        pause
+        exit /b 1
+    )
+)
+echo Using SUMO_HOME: %SUMO_HOME%
+
 echo [1/3] Converting OSM to SUMO network...
-netconvert --osm-files sample_hanoi.osm ^
+"%SUMO_HOME%\bin\netconvert" --osm-files sample_hanoi.osm ^
     -o hanoi.net.xml ^
     --geometry.remove ^
     --junctions.join ^
@@ -35,7 +49,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [3/3] Converting trips to routes...
-duarouter ^
+"%SUMO_HOME%\bin\duarouter" ^
     -n hanoi.net.xml ^
     -t hanoi.trips.xml ^
     -o hanoi.rou.xml ^

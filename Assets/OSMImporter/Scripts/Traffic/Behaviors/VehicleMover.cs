@@ -48,7 +48,7 @@ namespace OSMImporter.Traffic
             float dotPassed = Vector3.Dot(toTarget, roadDir);
 
             // ── Reached waypoint ──
-            bool hasReached = distSq < 1.0f || (distSq < 25.0f && dotPassed < 0f);
+            bool hasReached = distSq < 1.0f || (distSq < 9.0f && dotPassed < 0f);
 
             if (hasReached)
             {
@@ -66,7 +66,14 @@ namespace OSMImporter.Traffic
                         _ctx.StartNodeId = currentTarget.WaypointRef.OSMNodeId;
 
                     _ctx.ExactPathIdx++;
-                    _ctx.PathIdx++;
+
+                    // PathIdx chỉ tăng khi WaypointRef thay đổi (điểm nội suy giữ cùng WaypointRef)
+                    if (_ctx.ExactPathIdx < _ctx.ExactPath.Count)
+                    {
+                        var nextTarget = _ctx.ExactPath[_ctx.ExactPathIdx];
+                        if (nextTarget.WaypointRef != currentTarget.WaypointRef)
+                            _ctx.PathIdx = Mathf.Min(_ctx.PathIdx + 1, _ctx.Path.Count - 1);
+                    }
 
                     if (_ctx.ExactPathIdx >= _ctx.ExactPath.Count)
                     {

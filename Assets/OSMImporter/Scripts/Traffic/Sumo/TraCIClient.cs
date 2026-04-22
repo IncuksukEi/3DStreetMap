@@ -19,6 +19,7 @@ namespace OSMImporter.Traffic.Sumo
         private const byte CMD_CLOSE            = 0x7F;
         private const byte CMD_GET_VEHICLE_VAR  = 0xA4;
         private const byte CMD_GET_SIM_VAR      = 0xAB;
+        private const byte CMD_GET_TL_VAR       = 0xA2;
 
         // TraCI variable IDs
         private const byte VAR_ID_LIST          = 0x00;
@@ -30,6 +31,12 @@ namespace OSMImporter.Traffic.Sumo
         private const byte VAR_WIDTH            = 0x4D;
         private const byte VAR_ROAD_ID          = 0x50;
         private const byte VAR_LANE_INDEX       = 0x52;
+
+        // TLS-specific variable IDs
+        private const byte TL_RED_YELLOW_GREEN_STATE = 0x20;
+        private const byte TL_CURRENT_PHASE    = 0x28;
+        private const byte TL_CURRENT_PROGRAM  = 0x29;
+        private const byte TL_PHASE_DURATION   = 0x24;
 
         // TraCI type IDs
         private const byte TYPE_INTEGER         = 0x09;
@@ -182,6 +189,66 @@ namespace OSMImporter.Traffic.Sumo
         public int GetVehicleLaneIndex(string vehicleId)
         {
             return GetIntVariable(CMD_GET_VEHICLE_VAR, VAR_LANE_INDEX, vehicleId);
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // TRAFFIC LIGHT QUERIES
+        // ══════════════════════════════════════════════════════════════════
+
+        /// <summary>Danh sách Traffic Light IDs.</summary>
+        public List<string> GetTLSIdList()
+        {
+            return GetStringListVariable(CMD_GET_TL_VAR, VAR_ID_LIST, "");
+        }
+
+        /// <summary>
+        /// Lấy trạng thái đèn: chuỗi ký tự "rRgGyYoOsS" cho từng link.
+        /// r/R=red, g/G=green, y/Y=yellow, o/O=off, s/S=unused
+        /// </summary>
+        public string GetTLSState(string tlsId)
+        {
+            return GetStringVariable(CMD_GET_TL_VAR, TL_RED_YELLOW_GREEN_STATE, tlsId);
+        }
+
+        /// <summary>Phase index hiện tại (0-based).</summary>
+        public int GetTLSCurrentPhase(string tlsId)
+        {
+            return GetIntVariable(CMD_GET_TL_VAR, TL_CURRENT_PHASE, tlsId);
+        }
+
+        /// <summary>Thời gian còn lại của phase hiện tại (giây).</summary>
+        public float GetTLSPhaseDuration(string tlsId)
+        {
+            return (float)GetDoubleVariable(CMD_GET_TL_VAR, TL_PHASE_DURATION, tlsId);
+        }
+
+        /// <summary>
+        /// Struct chứa trạng thái 1 traffic light.
+        /// </summary>
+        public struct TLSState
+        {
+            public string Id;
+            public string State;      // "rRgGyY..." string
+            public int PhaseIndex;
+            public float PhaseDuration;
+        }
+
+        /// <summary>Lấy toàn bộ TLS states.</summary>
+        public List<TLSState> GetAllTLSStates()
+        {
+            var ids = GetTLSIdList();
+            var result = new List<TLSState>(ids.Count);
+            foreach (var id in ids)
+            {
+                result.Add(new TLSState
+                {
+                    Id = id,
+                    State = GetTLSState(id),
+                    PhaseIndex = GetTLSCurrentPhase(id),
+                    PhaseDuration = GetTLSPhaseDuration(id)
+                });
+            }
+            return result;
         }
 
         // ══════════════════════════════════════════════════════════════════
