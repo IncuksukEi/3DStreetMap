@@ -1,32 +1,19 @@
 using System;
 using System.IO;
-using System.Net;
-using System.Net.Security;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace OSMImporter.Editor
 {
     /// <summary>
-    /// Downloads OSM XML data from Overpass API (full query) hoặc OSM Main API (fallback).
+    /// Downloads OSM XML data from Overpass API hoặc OSM Main API (fallback).
+    /// Dùng UnityWebRequest — native HTTPS, không bị lỗi TLS của Mono HttpWebRequest.
     /// </summary>
     public static class OSMDownloader
     {
-        // Force TLS 1.2+ và bypass SSL cert — fix Unity không kết nối được HTTPS
-        static OSMDownloader()
-        {
-            ServicePointManager.SecurityProtocol =
-                SecurityProtocolType.Tls12 | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls;
-            ServicePointManager.ServerCertificateValidationCallback =
-                (object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors) => true;
-            // Tăng connection limit (default = 2 per host)
-            ServicePointManager.DefaultConnectionLimit = 10;
-        }
-
         // Overpass API mirrors
         private static readonly string[] OverpassEndpoints = new[]
         {
@@ -37,7 +24,7 @@ namespace OSMImporter.Editor
         };
 
         private static int _endpointIndex = 0;
-        private const int PerRequestTimeoutMs = 30_000; // 30s mỗi endpoint
+        private const int PerRequestTimeoutSec = 30;
         private const int RetryDelayMs = 1500;
 
         // OSM Main API — giới hạn 50k nodes/request nhưng rất ổn định cho bbox nhỏ
@@ -69,7 +56,7 @@ namespace OSMImporter.Editor
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // OVERPASS API
+        // OVERPASS API — POST request
         // ══════════════════════════════════════════════════════════════════
 
         private static async Task<string> TryOverpass(
@@ -77,6 +64,7 @@ namespace OSMImporter.Editor
             string tempPath, Action<string> onProgress)
         {
             string query = BuildOverpassQuery(minLat, minLon, maxLat, maxLon);
+            byte[] postData = Encoding.UTF8.GetBytes("data=" + Uri.EscapeDataString(query));
 
             for (int ep = 0; ep < OverpassEndpoints.Length; ep++)
             {
@@ -88,17 +76,14 @@ namespace OSMImporter.Editor
 
                 try
                 {
-                    await DownloadWithTimeout(
-                        () => CreateOverpassRequest(endpoint, query),
-                        tempPath, PerRequestTimeoutMs,
+                    string result = await PostDownload(endpoint, postData, tempPath, PerRequestTimeoutSec,
                         msg => onProgress?.Invoke($"{label} {msg}"));
 
-                    var fi = new FileInfo(tempPath);
-                    if (fi.Length > 100)
+                    if (result != null)
                     {
                         _endpointIndex = (_endpointIndex + ep + 1) % OverpassEndpoints.Length;
-                        onProgress?.Invoke($"✔ Overpass OK ({fi.Length / 1024f:F0} KB)");
-                        return tempPath;
+                        onProgress?.Invoke($"✔ Overpass OK ({new FileInfo(tempPath).Length / 1024f:F0} KB)");
+                        return result;
                     }
                 }
                 catch (Exception ex)
@@ -113,25 +98,8 @@ namespace OSMImporter.Editor
             return null;
         }
 
-        private static HttpWebRequest CreateOverpassRequest(string endpoint, string query)
-        {
-            byte[] postData = Encoding.UTF8.GetBytes("data=" + Uri.EscapeDataString(query));
-            var request = (HttpWebRequest)WebRequest.Create(endpoint);
-            request.Method = "POST";
-            request.ContentType = "application/x-www-form-urlencoded";
-            request.ContentLength = postData.Length;
-            request.Timeout = PerRequestTimeoutMs;
-            request.ReadWriteTimeout = PerRequestTimeoutMs;
-            request.UserAgent = "UnityOSMImporter/1.0";
-            request.KeepAlive = false;
-            // Ghi body đồng bộ (nhanh, chỉ vài KB)
-            using (var s = request.GetRequestStream())
-                s.Write(postData, 0, postData.Length);
-            return request;
-        }
-
         // ══════════════════════════════════════════════════════════════════
-        // OSM MAIN API (fallback — ổn định, không cần Overpass)
+        // OSM MAIN API (fallback — GET request)
         // ══════════════════════════════════════════════════════════════════
 
         private static async Task<string> TryOsmMainApi(
@@ -146,25 +114,13 @@ namespace OSMImporter.Editor
 
             try
             {
-                await DownloadWithTimeout(
-                    () =>
-                    {
-                        var req = (HttpWebRequest)WebRequest.Create(url);
-                        req.Method = "GET";
-                        req.Timeout = 60_000; // OSM Main API thường nhanh
-                        req.ReadWriteTimeout = 60_000;
-                        req.UserAgent = "UnityOSMImporter/1.0";
-                        req.KeepAlive = false;
-                        return req;
-                    },
-                    tempPath, 60_000,
+                string result = await GetDownload(url, tempPath, 60,
                     msg => onProgress?.Invoke($"OSM API: {msg}"));
 
-                var fi = new FileInfo(tempPath);
-                if (fi.Length > 100)
+                if (result != null)
                 {
-                    onProgress?.Invoke($"✔ OSM Main API OK ({fi.Length / 1024f:F0} KB)");
-                    return tempPath;
+                    onProgress?.Invoke($"✔ OSM Main API OK ({new FileInfo(tempPath).Length / 1024f:F0} KB)");
+                    return result;
                 }
             }
             catch (Exception ex)
@@ -176,42 +132,81 @@ namespace OSMImporter.Editor
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // CORE DOWNLOAD WITH HARD TIMEOUT
+        // UNITY WEB REQUEST — native HTTPS, không lỗi TLS
         // ══════════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Download response vào file với hard timeout (giải quyết GetResponseAsync không timeout).
-        /// </summary>
-        private static async Task DownloadWithTimeout(
-            Func<HttpWebRequest> createRequest, string tempPath, int timeoutMs,
+        /// <summary>POST request dùng UnityWebRequest.</summary>
+        private static async Task<string> PostDownload(
+            string url, byte[] postData, string savePath, int timeoutSec,
             Action<string> onProgress)
         {
-            var downloadTask = Task.Run(() =>
+            using (var request = new UnityWebRequest(url, "POST"))
             {
-                var request = createRequest();
+                request.uploadHandler = new UploadHandlerRaw(postData);
+                request.uploadHandler.contentType = "application/x-www-form-urlencoded";
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.timeout = timeoutSec;
+                request.SetRequestHeader("User-Agent", "UnityOSMImporter/1.0");
 
-                using (var response = request.GetResponse())
-                using (var respStream = response.GetResponseStream())
-                using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write))
+                // Bỏ qua SSL cert validation (fix cho self-signed cert / Unity Mono issue)
+                request.certificateHandler = new BypassCertHandler();
+
+                var op = request.SendWebRequest();
+
+                // Poll cho đến khi xong — giữ trên main thread
+                while (!op.isDone)
                 {
-                    byte[] buffer = new byte[81920];
-                    long totalRead = 0;
-                    int bytesRead;
-                    while ((bytesRead = respStream.Read(buffer, 0, bytesRead = buffer.Length)) > 0)
-                    {
-                        fileStream.Write(buffer, 0, bytesRead);
-                        totalRead += bytesRead;
-                        onProgress?.Invoke($"Downloaded {totalRead / 1024f:F0} KB...");
-                    }
+                    onProgress?.Invoke($"Downloading... {request.downloadedBytes / 1024f:F0} KB");
+                    await Task.Delay(200);
                 }
-            });
 
-            // Hard timeout — nếu Task.Run không xong trong thời gian → throw
-            if (await Task.WhenAny(downloadTask, Task.Delay(timeoutMs)) != downloadTask)
-                throw new TimeoutException($"Timeout sau {timeoutMs / 1000}s");
+                if (request.result != UnityWebRequest.Result.Success)
+                    throw new Exception(request.error);
 
-            // Re-throw exception nếu download task bị lỗi
-            await downloadTask;
+                byte[] data = request.downloadHandler.data;
+                if (data == null || data.Length < 100)
+                    return null;
+
+                File.WriteAllBytes(savePath, data);
+                return savePath;
+            }
+        }
+
+        /// <summary>GET request dùng UnityWebRequest.</summary>
+        private static async Task<string> GetDownload(
+            string url, string savePath, int timeoutSec,
+            Action<string> onProgress)
+        {
+            using (var request = UnityWebRequest.Get(url))
+            {
+                request.timeout = timeoutSec;
+                request.SetRequestHeader("User-Agent", "UnityOSMImporter/1.0");
+                request.certificateHandler = new BypassCertHandler();
+
+                var op = request.SendWebRequest();
+
+                while (!op.isDone)
+                {
+                    onProgress?.Invoke($"Downloading... {request.downloadedBytes / 1024f:F0} KB");
+                    await Task.Delay(200);
+                }
+
+                if (request.result != UnityWebRequest.Result.Success)
+                    throw new Exception(request.error);
+
+                byte[] data = request.downloadHandler.data;
+                if (data == null || data.Length < 100)
+                    return null;
+
+                File.WriteAllBytes(savePath, data);
+                return savePath;
+            }
+        }
+
+        // Bypass SSL certificate validation — cần cho một số mirror / Mono runtime
+        private class BypassCertHandler : CertificateHandler
+        {
+            protected override bool ValidateCertificate(byte[] certificateData) => true;
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -253,7 +248,6 @@ out skel qt;";
         private static string TrimError(Exception ex)
         {
             string msg = ex.Message;
-            // Cắt ngắn lỗi dài cho gọn UI
             if (msg.Length > 80) msg = msg.Substring(0, 77) + "...";
             return msg;
         }
