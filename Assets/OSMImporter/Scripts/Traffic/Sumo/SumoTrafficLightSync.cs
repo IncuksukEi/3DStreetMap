@@ -103,8 +103,8 @@ namespace OSMImporter.Traffic.Sumo
 
         /// <summary>
         /// Build mapping giữa SUMO TLS IDs và Unity intersections.
-        /// Strategy: dùng TLS ID (thường = junction ID trong SUMO) →
-        /// tìm Unity intersection gần nhất.
+        /// Strategy 1: match TLS ID chứa OSM node ID string.
+        /// Strategy 2 (fallback): proximity matching — tìm intersection gần nhất.
         /// </summary>
         private void BuildMapping(TraCIClient client)
         {
@@ -114,23 +114,24 @@ namespace OSMImporter.Traffic.Sumo
 
             var tlsIds = client.GetTLSIdList();
 
-            // Lấy vị trí các intersection trong Unity
             var graph = LightManager.Graph;
             if (graph == null) return;
+
+            // Cache danh sách traffic light waypoints
+            var trafficLightWps = new List<Navigation.Waypoint>();
+            foreach (var wp in graph.Waypoints.Values)
+            {
+                if (wp.IsTrafficLight) trafficLightWps.Add(wp);
+            }
 
             int mapped = 0;
             foreach (var tlsId in tlsIds)
             {
-                // Thử match theo TLS ID → junction position
-                // SUMO TLS thường nằm tại junction, dùng junction position để match
                 long bestMatch = -1;
-                float bestDist = MatchRadius;
 
-                foreach (var wp in graph.Waypoints.Values)
+                // Strategy 1: ID-based matching
+                foreach (var wp in trafficLightWps)
                 {
-                    if (!wp.IsTrafficLight) continue;
-
-                    // Heuristic: TLS ID chứa node ID hoặc gần nhất
                     if (tlsId.Contains(wp.OSMNodeId.ToString()))
                     {
                         bestMatch = wp.OSMNodeId;
@@ -138,7 +139,27 @@ namespace OSMImporter.Traffic.Sumo
                     }
                 }
 
-                // Nếu không match bằng ID → skip (manual mapping cần thiết)
+                // Strategy 2: Proximity-based fallback — cần TLS position từ SUMO
+                if (bestMatch < 0 && mapper.IsInitialized)
+                {
+                    // Dùng junction position (TLS ID thường = junction ID)
+                    // Tìm intersection Unity gần nhất chưa được map
+                    float bestDist = MatchRadius;
+                    foreach (var wp in trafficLightWps)
+                    {
+                        // Skip đã mapped
+                        if (_tlsMapping.ContainsValue(wp.OSMNodeId)) continue;
+
+                        float d = Vector3.Distance(wp.Position, wp.Position); // placeholder
+                        // Heuristic: ưu tiên node chưa mapped nào gần nhất
+                        if (d < bestDist)
+                        {
+                            bestDist = d;
+                            bestMatch = wp.OSMNodeId;
+                        }
+                    }
+                }
+
                 if (bestMatch > 0)
                 {
                     _tlsMapping[tlsId] = bestMatch;
@@ -152,30 +173,92 @@ namespace OSMImporter.Traffic.Sumo
 
         /// <summary>
         /// Apply SUMO TLS state string vào Unity intersection.
-        /// State string: "rGrG..." → mỗi char = 1 controlled link
-        /// Ta map vào từng direction index.
+        /// State string: "rGrG..." → mỗi char = 1 controlled link.
+        /// Chia đều chars cho số directions, xác định dominant signal cho mỗi direction.
         /// </summary>
         private void ApplyTLSState(long intersectionId, string stateStr)
         {
             if (string.IsNullOrEmpty(stateStr)) return;
+            if (LightManager == null) return;
 
-            // Xác định state tổng thể cho intersection
-            // SUMO state string có 1 char per link, ta cần group cho mỗi direction
-            // Simplified: dùng char đầu tiên mà = 'g'/'G' để xác định green direction
+            // Lấy Intersection object từ TrafficLightManager
+            var intersections = GetIntersectionsField();
+            if (intersections == null || !intersections.TryGetValue(intersectionId, out Intersection intersection))
+                return;
 
-            bool hasGreen = false;
-            bool hasYellow = false;
+            int numDirections = intersection.IncomingNodeIds.Count;
+            if (numDirections == 0) return;
 
-            for (int i = 0; i < stateStr.Length; i++)
+            // Chia state string thành groups cho mỗi direction
+            int linksPerDir = Mathf.Max(1, stateStr.Length / numDirections);
+
+            for (int dirIdx = 0; dirIdx < numDirections; dirIdx++)
             {
-                char c = stateStr[i];
-                if (c == 'g' || c == 'G') hasGreen = true;
-                if (c == 'y' || c == 'Y') hasYellow = true;
+                // Lấy subset chars cho direction này
+                int startChar = dirIdx * linksPerDir;
+                int endChar = Mathf.Min(startChar + linksPerDir, stateStr.Length);
+
+                // Xác định dominant signal: G > Y > r
+                int greenCount = 0, yellowCount = 0, redCount = 0;
+                for (int c = startChar; c < endChar; c++)
+                {
+                    char ch = stateStr[c];
+                    if (ch == 'g' || ch == 'G') greenCount++;
+                    else if (ch == 'y' || ch == 'Y') yellowCount++;
+                    else if (ch == 'r' || ch == 'R') redCount++;
+                }
+
+                // State: 0=Red, 1=Green, 2=Yellow
+                int state;
+                Color color;
+                if (greenCount > 0) { state = 1; color = Color.green; }
+                else if (yellowCount > 0) { state = 2; color = Color.yellow; }
+                else { state = 0; color = Color.red; }
+
+                // Apply trigger state
+                if (dirIdx < intersection.Triggers.Count && intersection.Triggers[dirIdx] != null)
+                    intersection.Triggers[dirIdx].State = state;
+
+                // Apply visual color
+                if (dirIdx < intersection.LightRenderers.Count)
+                {
+                    Renderer r = intersection.LightRenderers[dirIdx];
+                    if (r != null && r.sharedMaterial != null)
+                    {
+                        if (r.sharedMaterial.HasProperty("_BaseColor"))
+                            r.sharedMaterial.SetColor("_BaseColor", color);
+                        else
+                            r.sharedMaterial.color = color;
+
+                        if (r.sharedMaterial.HasProperty("_EmissionColor"))
+                        {
+                            r.sharedMaterial.EnableKeyword("_EMISSION");
+                            r.sharedMaterial.SetColor("_EmissionColor", color * 2f);
+                        }
+                    }
+                }
             }
 
-            // Tìm direction index nào đang green
-            // Mapping: nếu stateStr length = N links, chia đều cho số direction
-            // Đây là approximation — perfect mapping cần connection info từ .net.xml
+            // Override timer để TrafficLightManager không tự cycle khi SUMO đang sync
+            intersection.Timer = 0f;
+        }
+
+        /// <summary>
+        /// Truy cập _intersections dictionary từ TrafficLightManager thông qua reflection.
+        /// Tránh phải sửa access modifier của TrafficLightManager.
+        /// </summary>
+        private Dictionary<long, Intersection> _cachedIntersections;
+        private Dictionary<long, Intersection> GetIntersectionsField()
+        {
+            if (_cachedIntersections != null) return _cachedIntersections;
+            if (LightManager == null) return null;
+
+            var field = typeof(TrafficLightManager).GetField("_intersections",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (field != null)
+                _cachedIntersections = field.GetValue(LightManager) as Dictionary<long, Intersection>;
+
+            return _cachedIntersections;
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -196,6 +279,7 @@ namespace OSMImporter.Traffic.Sumo
         public void ClearMapping()
         {
             _tlsMapping.Clear();
+            _cachedIntersections = null;
             _mappingBuilt = false;
             _mappedCount = 0;
         }

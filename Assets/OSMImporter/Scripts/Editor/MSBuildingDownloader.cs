@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Networking;
 
 namespace OSMImporter.Editor
 {
@@ -185,36 +185,50 @@ namespace OSMImporter.Editor
             
             try
             {
-                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(DATASET_LINKS_URL);
-                req.Timeout = 60_000;
-                req.UserAgent = "UnityOSMImporter/1.0";
-
-                using (WebResponse resp = await req.GetResponseAsync())
-                using (Stream stream = resp.GetResponseStream())
-                using (StreamReader reader = new StreamReader(stream))
+                using (var request = UnityWebRequest.Get(DATASET_LINKS_URL))
                 {
-                    string header = await reader.ReadLineAsync(); // Skip header
-                    string line;
-                    int count = 0;
-                    while ((line = await reader.ReadLineAsync()) != null)
+                    request.timeout = 60;
+                    request.SetRequestHeader("User-Agent", "UnityOSMImporter/1.0");
+                    request.certificateHandler = new BypassCertHandler();
+
+                    var op = request.SendWebRequest();
+                    while (!op.isDone)
                     {
-                        // CSV format: Region,QuadKey,Url,Size
-                        var parts = ParseCsvLine(line);
-                        if (parts.Length >= 3)
-                        {
-                            links.Add(new DatasetLink
-                            {
-                                Region = parts[0].Trim(),
-                                QuadKey = parts.Length > 1 ? parts[1].Trim() : "",
-                                Url = parts[2].Trim(),
-                                Size = parts.Length > 3 && long.TryParse(parts[3].Trim(), out long s) ? s : 0
-                            });
-                        }
-                        count++;
-                        if (count % 5000 == 0)
-                            onProgress?.Invoke($"Reading index: {count} entries...");
+                        onProgress?.Invoke($"Downloading index... {request.downloadedBytes / 1024f:F0} KB");
+                        await Task.Delay(300);
                     }
-                    onProgress?.Invoke($"Index loaded: {links.Count} tiles worldwide");
+
+                    if (request.result != UnityWebRequest.Result.Success)
+                    {
+                        Debug.LogWarning($"[MSBuildings] Failed to load dataset-links.csv: {request.error}");
+                        return links;
+                    }
+
+                    string csv = request.downloadHandler.text;
+                    using (var reader = new StringReader(csv))
+                    {
+                        string header = reader.ReadLine(); // Skip header
+                        string line;
+                        int count = 0;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            var parts = ParseCsvLine(line);
+                            if (parts.Length >= 3)
+                            {
+                                links.Add(new DatasetLink
+                                {
+                                    Region = parts[0].Trim(),
+                                    QuadKey = parts.Length > 1 ? parts[1].Trim() : "",
+                                    Url = parts[2].Trim(),
+                                    Size = parts.Length > 3 && long.TryParse(parts[3].Trim(), out long s) ? s : 0
+                                });
+                            }
+                            count++;
+                            if (count % 5000 == 0)
+                                onProgress?.Invoke($"Reading index: {count} entries...");
+                        }
+                        onProgress?.Invoke($"Index loaded: {links.Count} tiles worldwide");
+                    }
                 }
             }
             catch (Exception ex)
@@ -262,41 +276,36 @@ namespace OSMImporter.Editor
 
         private static async Task<string> DownloadAndDecompress(string url, Action<string> onProgress)
         {
-            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-            req.Timeout = 120_000;
-            req.UserAgent = "UnityOSMImporter/1.0";
-
-            using (WebResponse resp = await req.GetResponseAsync())
-            using (Stream stream = resp.GetResponseStream())
+            using (var request = UnityWebRequest.Get(url))
             {
-                // Buffer vào memory
-                using (var ms = new MemoryStream())
+                request.timeout = 120;
+                request.SetRequestHeader("User-Agent", "UnityOSMImporter/1.0");
+                request.certificateHandler = new BypassCertHandler();
+
+                var op = request.SendWebRequest();
+                while (!op.isDone)
                 {
-                    byte[] buffer = new byte[81920];
-                    int bytesRead;
-                    long total = 0;
-                    while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
-                    {
-                        await ms.WriteAsync(buffer, 0, bytesRead);
-                        total += bytesRead;
-                        if (total % 500000 < 81920)
-                            onProgress?.Invoke($"Downloaded {total / 1024f:F0} KB...");
-                    }
+                    onProgress?.Invoke($"Downloaded {request.downloadedBytes / 1024f:F0} KB...");
+                    await Task.Delay(200);
+                }
 
-                    ms.Position = 0;
+                if (request.result != UnityWebRequest.Result.Success)
+                    throw new Exception(request.error);
 
-                    // Decompress gzip
-                    if (url.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
-                    {
-                        using (var gzip = new GZipStream(ms, CompressionMode.Decompress))
-                        using (var reader = new StreamReader(gzip, Encoding.UTF8))
-                            return await reader.ReadToEndAsync();
-                    }
-                    else
-                    {
-                        using (var reader = new StreamReader(ms, Encoding.UTF8))
-                            return await reader.ReadToEndAsync();
-                    }
+                byte[] rawData = request.downloadHandler.data;
+                if (rawData == null || rawData.Length == 0) return null;
+
+                // Decompress gzip nếu cần
+                if (url.EndsWith(".gz", StringComparison.OrdinalIgnoreCase))
+                {
+                    using (var ms = new MemoryStream(rawData))
+                    using (var gzip = new GZipStream(ms, CompressionMode.Decompress))
+                    using (var reader = new StreamReader(gzip, Encoding.UTF8))
+                        return await reader.ReadToEndAsync();
+                }
+                else
+                {
+                    return Encoding.UTF8.GetString(rawData);
                 }
             }
         }
@@ -430,6 +439,12 @@ namespace OSMImporter.Editor
             {
                 return null;
             }
+        }
+
+        // Bypass SSL certificate validation
+        private class BypassCertHandler : CertificateHandler
+        {
+            protected override bool ValidateCertificate(byte[] certificateData) => true;
         }
     }
 

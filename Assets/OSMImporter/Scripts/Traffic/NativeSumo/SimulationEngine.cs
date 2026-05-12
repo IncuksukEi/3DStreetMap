@@ -45,7 +45,6 @@ namespace OSMImporter.Traffic.NativeSumo
 
         public SNetwork network;
         public List<SVehicle> allVehicles = new List<SVehicle>();
-        private List<SVehicle> _toRemove = new List<SVehicle>();
 
         // Cached edge lists cho random spawn
         private List<SEdge> _spawnableEdges;
@@ -400,15 +399,12 @@ namespace OSMImporter.Traffic.NativeSumo
 
         private void RemoveFinishedVehicles()
         {
-            _toRemove.Clear();
-            foreach (var veh in allVehicles)
+            // Swap-remove pattern: O(1) per removal thay vì O(N)
+            for (int i = allVehicles.Count - 1; i >= 0; i--)
             {
-                if (veh.isFinished)
-                    _toRemove.Add(veh);
-            }
+                var veh = allVehicles[i];
+                if (!veh.isFinished) continue;
 
-            foreach (var veh in _toRemove)
-            {
                 // Xoá khỏi lane
                 veh.currentLane?.vehicles.Remove(veh);
 
@@ -416,7 +412,10 @@ namespace OSMImporter.Traffic.NativeSumo
                 if (veh.rendererObject != null)
                     Destroy(veh.rendererObject);
 
-                allVehicles.Remove(veh);
+                // Swap với phần tử cuối + truncate
+                int last = allVehicles.Count - 1;
+                allVehicles[i] = allVehicles[last];
+                allVehicles.RemoveAt(last);
                 _totalFinished++;
             }
         }

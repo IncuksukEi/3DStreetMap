@@ -167,7 +167,11 @@ namespace OSMImporter.Traffic.Sumo
 
             _connected = _client.Connect(10000);
             if (_connected)
+            {
                 Debug.Log("[SumoBridge] Connected to SUMO.");
+                // Kích hoạt subscription mode để giảm round-trips
+                _client.SubscribeVehicleVariables();
+            }
             return _connected;
         }
 
@@ -193,14 +197,21 @@ namespace OSMImporter.Traffic.Sumo
 
         private void TryDetectOriginFromScene()
         {
-            // Tìm Editor-generated origin data (OSMImporterWindow lưu trong PlayerPrefs/EditorPrefs)
-            // Fallback: dùng giá trị Inspector
-            var editor = FindFirstObjectByType<OSMImporter.OSMAreaRegistry>();
-            if (editor != null)
+            // Thử đọc từ EditorPrefs (OSMImporterWindow lưu khi generate)
+            #if UNITY_EDITOR
+            if (UnityEditor.EditorPrefs.HasKey("OSM_OriginLat") && UnityEditor.EditorPrefs.HasKey("OSM_OriginLon"))
             {
-                Debug.Log("[SumoBridge] Found OSMAreaRegistry — using scene-based origin.");
-                // OSMAreaRegistry không lưu lat/lon, giữ nguyên Inspector values
+                OriginLat = UnityEditor.EditorPrefs.GetFloat("OSM_OriginLat");
+                OriginLon = UnityEditor.EditorPrefs.GetFloat("OSM_OriginLon");
+                Debug.Log($"[SumoBridge] Origin from EditorPrefs: ({OriginLat:F6}, {OriginLon:F6})");
+                return;
             }
+            #endif
+
+            // Fallback: tìm OSMAreaRegistry trong scene
+            var registry = FindFirstObjectByType<OSMImporter.OSMAreaRegistry>();
+            if (registry != null)
+                Debug.Log("[SumoBridge] Found OSMAreaRegistry — using Inspector values for origin.");
         }
 
         // ══════════════════════════════════════════════════════════════════
