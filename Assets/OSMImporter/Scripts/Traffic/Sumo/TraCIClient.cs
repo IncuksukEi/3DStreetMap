@@ -20,6 +20,8 @@ namespace OSMImporter.Traffic.Sumo
         private const byte CMD_GET_VEHICLE_VAR  = 0xA4;
         private const byte CMD_GET_SIM_VAR      = 0xAB;
         private const byte CMD_GET_TL_VAR       = 0xA2;
+        private const byte CMD_SUBSCRIBE_VEHICLE_VAR = 0xD4;
+        private const byte CMD_RESPONSE_SUBSCRIBE_VEHICLE_VAR = 0xE4;
 
         // TraCI variable IDs
         private const byte VAR_ID_LIST          = 0x00;
@@ -44,6 +46,9 @@ namespace OSMImporter.Traffic.Sumo
         private const byte TYPE_STRING          = 0x0C;
         private const byte TYPE_STRINGLIST      = 0x0E;
         private const byte TYPE_POSITION2D      = 0x01;
+
+        // Subscription state
+        private bool _vehicleSubActive;
 
         private TcpClient _tcp;
         private NetworkStream _stream;
@@ -121,7 +126,11 @@ namespace OSMImporter.Traffic.Sumo
             var cmd = new List<byte> { CMD_SIMSTEP };
             WriteDouble(cmd, targetTime);
             SendCommand(cmd);
-            ReceiveResponse();
+            var resp = ReceiveResponse();
+
+            // Nếu đã subscribe, parse subscription results từ SimStep response
+            if (_vehicleSubActive && resp != null)
+                ParseSubscriptionResults(resp);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -252,7 +261,7 @@ namespace OSMImporter.Traffic.Sumo
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // BATCH QUERY — giảm round-trip TCP
+        // SUBSCRIPTION — push data từ SUMO, 0 round-trip per frame
         // ══════════════════════════════════════════════════════════════════
 
         public struct VehicleState
@@ -264,12 +273,184 @@ namespace OSMImporter.Traffic.Sumo
             public string VehicleType;
         }
 
+        // Cached subscription results — cập nhật mỗi SimStep
+        private List<VehicleState> _subscriptionCache = new List<VehicleState>();
+
         /// <summary>
-        /// Lấy toàn bộ state xe trong 1 batch call.
-        /// Tối ưu: thay vì N×4 round-trips, chỉ cần N+1.
+        /// Subscribe vehicle variables 1 lần. SUMO sẽ tự push data sau mỗi SimStep.
+        /// Gọi 1 lần sau khi connect, không cần gọi lại.
+        /// </summary>
+        public bool SubscribeVehicleVariables()
+        {
+            try
+            {
+                // Subscribe cho tất cả xe (objectId = "") với begin=0, end=max
+                var cmd = new List<byte> { CMD_SUBSCRIBE_VEHICLE_VAR };
+
+                // Begin time (double) = 0
+                WriteDouble(cmd, 0.0);
+                // End time (double) = rất lớn
+                WriteDouble(cmd, 1e12);
+
+                // Object ID = "" (subscribe cho tất cả)
+                WriteString(cmd, "");
+
+                // Số biến cần subscribe
+                cmd.Add(4);
+                cmd.Add(VAR_POSITION);
+                cmd.Add(VAR_ANGLE);
+                cmd.Add(VAR_SPEED);
+                cmd.Add(VAR_TYPE);
+
+                SendCommand(cmd);
+                var resp = ReceiveResponse();
+                _vehicleSubActive = resp != null;
+
+                if (_vehicleSubActive)
+                    Debug.Log("[TraCI] Vehicle subscription active — zero round-trip mode.");
+                else
+                    Debug.LogWarning("[TraCI] Vehicle subscription failed — falling back to polling.");
+
+                return _vehicleSubActive;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[TraCI] Subscription error: {e.Message} — using polling fallback.");
+                _vehicleSubActive = false;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Parse subscription results từ SimStep response.
+        /// SUMO gửi kèm subscription data sau mỗi simulation step.
+        /// </summary>
+        private void ParseSubscriptionResults(byte[] resp)
+        {
+            _subscriptionCache.Clear();
+            if (resp == null || resp.Length < 5) return;
+
+            try
+            {
+                int offset = 0;
+                while (offset < resp.Length - 4)
+                {
+                    // Mỗi subscription response: [len][cmdId=0xE4][objectId][numVars][var+type+data...]
+                    int cmdLen = resp[offset];
+                    if (cmdLen == 0 && offset + 5 <= resp.Length)
+                    {
+                        cmdLen = ReadInt(resp, offset + 1);
+                        offset += 5;
+                    }
+                    else
+                    {
+                        offset++;
+                    }
+
+                    if (offset >= resp.Length) break;
+                    byte cmdId = resp[offset++];
+
+                    // Skip non-subscription responses (status, etc)
+                    if (cmdId != CMD_RESPONSE_SUBSCRIBE_VEHICLE_VAR)
+                    {
+                        offset += cmdLen - 2;
+                        continue;
+                    }
+
+                    // Parse object ID
+                    if (offset + 4 > resp.Length) break;
+                    int idLen = ReadInt(resp, offset); offset += 4;
+                    if (offset + idLen > resp.Length) break;
+                    string vehicleId = Encoding.ASCII.GetString(resp, offset, idLen);
+                    offset += idLen;
+
+                    if (offset >= resp.Length) break;
+                    int numVars = resp[offset++];
+
+                    var state = new VehicleState { Id = vehicleId };
+
+                    // Parse từng variable
+                    for (int v = 0; v < numVars && offset < resp.Length; v++)
+                    {
+                        if (offset + 2 > resp.Length) break;
+                        byte varId = resp[offset++];
+                        byte status = resp[offset++]; // 0x00 = OK
+
+                        if (status != 0x00)
+                        {
+                            // Skip error data
+                            if (offset + 1 <= resp.Length)
+                            {
+                                byte errType = resp[offset++];
+                                if (errType == TYPE_STRING && offset + 4 <= resp.Length)
+                                {
+                                    int errLen = ReadInt(resp, offset); offset += 4;
+                                    offset += errLen;
+                                }
+                            }
+                            continue;
+                        }
+
+                        if (offset >= resp.Length) break;
+                        byte dataType = resp[offset++];
+
+                        switch (varId)
+                        {
+                            case VAR_POSITION:
+                                if (dataType == TYPE_POSITION2D && offset + 16 <= resp.Length)
+                                {
+                                    double x = ReadDouble(resp, offset); offset += 8;
+                                    double y = ReadDouble(resp, offset); offset += 8;
+                                    state.Position = new Vector2((float)x, (float)y);
+                                }
+                                break;
+                            case VAR_ANGLE:
+                                if (dataType == TYPE_DOUBLE && offset + 8 <= resp.Length)
+                                {
+                                    state.Angle = (float)ReadDouble(resp, offset); offset += 8;
+                                }
+                                break;
+                            case VAR_SPEED:
+                                if (dataType == TYPE_DOUBLE && offset + 8 <= resp.Length)
+                                {
+                                    state.Speed = (float)ReadDouble(resp, offset); offset += 8;
+                                }
+                                break;
+                            case VAR_TYPE:
+                                if (dataType == TYPE_STRING && offset + 4 <= resp.Length)
+                                {
+                                    int sLen = ReadInt(resp, offset); offset += 4;
+                                    if (offset + sLen <= resp.Length)
+                                    {
+                                        state.VehicleType = Encoding.ASCII.GetString(resp, offset, sLen);
+                                        offset += sLen;
+                                    }
+                                }
+                                break;
+                        }
+                    }
+
+                    _subscriptionCache.Add(state);
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[TraCI] Subscription parse error: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Lấy toàn bộ state xe.
+        /// Nếu subscription active → trả về cached data (0 round-trip).
+        /// Nếu không → fallback polling (N×4 round-trips).
         /// </summary>
         public List<VehicleState> GetAllVehicleStates()
         {
+            // Subscription mode: data đã được parse trong SimulationStep
+            if (_vehicleSubActive && _subscriptionCache.Count > 0)
+                return _subscriptionCache;
+
+            // Fallback: polling mode
             var ids = GetVehicleIDList();
             var states = new List<VehicleState>(ids.Count);
 

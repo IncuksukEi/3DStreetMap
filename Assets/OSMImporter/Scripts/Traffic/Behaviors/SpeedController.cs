@@ -32,6 +32,8 @@ namespace OSMImporter.Traffic
 
         public void AdaptSpeed()
         {
+            if (_ctx.EmergencyBraking) return;
+
             // Tốc độ tối đa giới hạn theo loại đường
             float speedLimit = _ctx.BaseSpeed * _ctx.RuntimeSpeedScale
                              * RoadUtility.GetRoadTypeSpeedMultiplier(_ctx.CurrentRoadType);

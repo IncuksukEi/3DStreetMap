@@ -37,37 +37,7 @@ namespace OSMImporter.Traffic
 
             while (!pickedTarget && pickAttempts++ < 8)
             {
-                long candidateId = 0;
-                float r = Random.value;
-
-                if (TrafficSpawner.Instance != null)
-                {
-                    if (TrafficSpawner.Instance.EdgeNodes != null
-                        && TrafficSpawner.Instance.EdgeNodes.Count > 0 && r < 0.25f)
-                    {
-                        Waypoint wp = TrafficSpawner.Instance.EdgeNodes[
-                            Random.Range(0, TrafficSpawner.Instance.EdgeNodes.Count)];
-                        if (wp != null && wp.OSMNodeId != _ctx.StartNodeId)
-                            candidateId = wp.OSMNodeId;
-                    }
-                    else if (TrafficSpawner.Instance.Buildings != null
-                             && TrafficSpawner.Instance.Buildings.Count > 0 && r < 0.50f)
-                    {
-                        Transform targetBldg = TrafficSpawner.Instance.Buildings[
-                            Random.Range(0, TrafficSpawner.Instance.Buildings.Count)];
-                        Waypoint wp = graph.FindNearest(targetBldg.position);
-                        if (wp != null && wp.OSMNodeId != _ctx.StartNodeId)
-                            candidateId = wp.OSMNodeId;
-                    }
-                    else
-                    {
-                        candidateId = keys[Random.Range(0, keys.Count)];
-                    }
-                }
-                else
-                {
-                    candidateId = keys[Random.Range(0, keys.Count)];
-                }
+                long candidateId = keys[Random.Range(0, keys.Count)];
 
                 if (candidateId == 0 || candidateId == _ctx.StartNodeId) continue;
 

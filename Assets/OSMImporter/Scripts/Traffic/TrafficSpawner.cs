@@ -242,23 +242,8 @@ namespace OSMImporter.Traffic
             {
                 Waypoint wp = null;
                 
-                // Phân bổ spawn đa dạng: 25% Rìa, 25% Toà nhà, 50% Ngẫu nhiên trên đường
-                float randVal = Random.value;
-                if (EdgeNodes.Count > 0 && randVal < 0.25f)
-                {
-                    wp = EdgeNodes[Random.Range(0, EdgeNodes.Count)];
-                }
-                else if (Buildings != null && Buildings.Count > 0 && randVal < 0.50f)
-                {
-                    Transform bldg = Buildings[Random.Range(0, Buildings.Count)];
-                    wp = Graph.FindNearest(bldg.position);
-                }
-                else
-                {
-                    // Random waypoint từ list đã shuffle
-                    wp = list[attempt % list.Count];
-                }
-
+                // Random waypoint từ list đã shuffle
+                wp = list[attempt % list.Count];
                 if (wp == null) continue;
                 
                 // Không spawn ở ngã tư, có đèn giao thông, hoặc khu vực đang bị tắc nghẽn

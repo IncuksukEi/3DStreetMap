@@ -142,9 +142,9 @@ namespace OSMImporter.Traffic
 
                 if (toDist < minGap)
                 {
-                    float dotFwd = Vector3.Dot(t.forward, pOther.transform.forward);
                     float dotDir2 = Vector3.Dot(t.forward, toDiff.normalized);
-                    if (dotDir2 > 0.5f && dotFwd < 0.6f)
+
+                    if (dotDir2 > 0.3f)
                     {
                         blocked = true;
                         break;
@@ -154,8 +154,9 @@ namespace OSMImporter.Traffic
 
             if (blocked)
             {
-                displacement *= 0.5f;
-                _ctx.DesiredSpeed = Mathf.Min(_ctx.DesiredSpeed, _ctx.CurrentSpeed * 0.5f);
+                displacement = Vector3.zero;
+                _ctx.DesiredSpeed = 0f;
+                _ctx.Braking = true;
             }
 
             t.position += displacement;

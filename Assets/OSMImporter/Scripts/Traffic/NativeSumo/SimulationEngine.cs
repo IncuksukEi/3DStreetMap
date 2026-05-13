@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using OSMImporter.Traffic.NativeSumo.Graph;
 using OSMImporter.Traffic.NativeSumo.Models;
+using OSMImporter.Traffic.Rules;
 
 namespace OSMImporter.Traffic.NativeSumo
 {
@@ -45,7 +46,6 @@ namespace OSMImporter.Traffic.NativeSumo
 
         public SNetwork network;
         public List<SVehicle> allVehicles = new List<SVehicle>();
-        private List<SVehicle> _toRemove = new List<SVehicle>();
 
         // Cached edge lists cho random spawn
         private List<SEdge> _spawnableEdges;
@@ -54,6 +54,7 @@ namespace OSMImporter.Traffic.NativeSumo
         private LC2013 lcModel = new LC2013();
 
         private Transform _vehicleParent;
+        private TrafficRulePipeline<NativeSumoRuleContext> _rulePipeline;
 
         // ══════════════════════════════════════════════════════════════════
         // LIFECYCLE
@@ -63,6 +64,16 @@ namespace OSMImporter.Traffic.NativeSumo
         {
             var go = new GameObject("NativeSumo_Vehicles");
             _vehicleParent = go.transform;
+
+            _rulePipeline = new TrafficRulePipeline<NativeSumoRuleContext>();
+            TrafficRuleRegistry<NativeSumoRuleContext>.Instance.PopulateDefaults(_rulePipeline);
+            RegisterDefaultNativeRules();
+        }
+
+        private void RegisterDefaultNativeRules()
+        {
+            _rulePipeline.AddRule(new NativeSumoAvoidFrontCollisionRule());
+            _rulePipeline.AddRule(new NativeSumoMaxSpeedLimitRule());
         }
 
         void Update()
@@ -190,7 +201,32 @@ namespace OSMImporter.Traffic.NativeSumo
                         }
 
                         veh.currentSpeed = cfModel.FollowSpeed(veh.currentSpeed, leaderV, gap, stepMillis);
+
+                        float laneMax = lane.maxSpeed > 0 ? lane.maxSpeed : float.MaxValue;
+                        veh.currentSpeed = Mathf.Min(veh.currentSpeed, Mathf.Min(veh.maxSpeed, laneMax));
                     }
+                }
+            }
+
+            // 3.5 Rule pipeline per vehicle
+            foreach (var veh in allVehicles)
+            {
+                if (veh.isFinished || veh.currentLane == null) continue;
+
+                var ruleCtx = new NativeSumoRuleContext(veh, network);
+                ruleCtx.StepDt = dt;
+                var commands = _rulePipeline.Execute(ruleCtx);
+
+                if (commands.ShouldHardStop)
+                {
+                    veh.currentSpeed = 0f;
+                }
+                else
+                {
+                    if (commands.ResolvedMaxSpeed < float.MaxValue)
+                        veh.currentSpeed = Mathf.Min(veh.currentSpeed, commands.ResolvedMaxSpeed);
+                    if (commands.ResolvedBrakeForce > 0f)
+                        veh.currentSpeed *= (1f - commands.ResolvedBrakeForce);
                 }
             }
 
@@ -219,25 +255,18 @@ namespace OSMImporter.Traffic.NativeSumo
         /// </summary>
         private void TransitionToNextEdge(SVehicle veh)
         {
-            // Tính phần dư (xe đã đi quá bao nhiêu mét)
             float overshoot = veh.positionOnLane - veh.currentLane.length;
+            SLane previousLane = veh.currentLane;
 
-            // Xoá xe khỏi lane hiện tại
-            veh.currentLane.vehicles.Remove(veh);
-
-            // Kiểm tra route còn edge nào không
             if (veh.route.Count == 0)
             {
+                previousLane.vehicles.Remove(veh);
                 veh.isFinished = true;
                 return;
             }
 
-            // Lấy edge tiếp theo từ route
-            SEdge nextEdge = veh.route.Dequeue();
-            veh.routeEdgeIndex++;
-            veh.currentEdge = nextEdge;
+            SEdge nextEdge = veh.route.Peek();
 
-            // Chọn lane có shape hợp lệ
             SLane nextLane = null;
             foreach (var lane in nextEdge.lanes)
             {
@@ -248,18 +277,32 @@ namespace OSMImporter.Traffic.NativeSumo
                 }
             }
 
-            // Nếu không có lane hợp lệ → kết thúc xe
             if (nextLane == null)
             {
+                previousLane.vehicles.Remove(veh);
                 veh.isFinished = true;
                 return;
             }
 
+            foreach (var existing in nextLane.vehicles)
+            {
+                float gap = existing.positionOnLane - existing.length;
+                if (gap < veh.length + 1.5f)
+                {
+                    veh.positionOnLane = previousLane.length;
+                    veh.currentSpeed = 0f;
+                    return;
+                }
+            }
+
+            veh.route.Dequeue();
+            previousLane.vehicles.Remove(veh);
+            veh.routeEdgeIndex++;
+            veh.currentEdge = nextEdge;
             veh.currentLane = nextLane;
             veh.positionOnLane = Mathf.Max(0f, overshoot);
             nextLane.vehicles.Add(veh);
 
-            // Clamp speed cho lane mới
             veh.currentSpeed = Mathf.Min(veh.currentSpeed, nextLane.maxSpeed);
         }
 
@@ -315,6 +358,12 @@ namespace OSMImporter.Traffic.NativeSumo
 
             // Kiểm tra lane đầu không quá đông
             if (startLane.vehicles.Count >= 3) return;
+
+            foreach (var existing in startLane.vehicles)
+            {
+                if (existing.positionOnLane < existing.length + 2f)
+                    return;
+            }
 
             // Tạo route bằng BFS
             var route = FindRoute(startEdge, endEdge);
@@ -400,15 +449,12 @@ namespace OSMImporter.Traffic.NativeSumo
 
         private void RemoveFinishedVehicles()
         {
-            _toRemove.Clear();
-            foreach (var veh in allVehicles)
+            // Swap-remove pattern: O(1) per removal thay vì O(N)
+            for (int i = allVehicles.Count - 1; i >= 0; i--)
             {
-                if (veh.isFinished)
-                    _toRemove.Add(veh);
-            }
+                var veh = allVehicles[i];
+                if (!veh.isFinished) continue;
 
-            foreach (var veh in _toRemove)
-            {
                 // Xoá khỏi lane
                 veh.currentLane?.vehicles.Remove(veh);
 
@@ -416,7 +462,10 @@ namespace OSMImporter.Traffic.NativeSumo
                 if (veh.rendererObject != null)
                     Destroy(veh.rendererObject);
 
-                allVehicles.Remove(veh);
+                // Swap với phần tử cuối + truncate
+                int last = allVehicles.Count - 1;
+                allVehicles[i] = allVehicles[last];
+                allVehicles.RemoveAt(last);
                 _totalFinished++;
             }
         }

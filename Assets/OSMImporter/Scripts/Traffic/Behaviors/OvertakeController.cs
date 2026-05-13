@@ -73,6 +73,8 @@ namespace OSMImporter.Traffic
                 float rightTarget = Mathf.Lerp(_ctx.LaneOffset, curMax * 0.8f, shiftRatio * 0.5f);
                 _ctx.TargetOvertakeOffset = Mathf.Max(_ctx.TargetOvertakeOffset, rightTarget);
             }
+
+            _ctx.TargetOvertakeOffset = Mathf.Clamp(_ctx.TargetOvertakeOffset, -curMax, curMax);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -173,6 +175,7 @@ namespace OSMImporter.Traffic
             // Kiểm tra bên TRÁI
             bool leftClear = false;
             float targetLeft = _ctx.LaneOffset - passWidth;
+            targetLeft = Mathf.Max(targetLeft, -maxWid);
             if (targetLeft >= -maxWid)
             {
                 leftClear = IsLateralClear(-t.right, lateralCheck);
@@ -192,6 +195,7 @@ namespace OSMImporter.Traffic
             // Kiểm tra bên PHẢI
             bool rightClear = false;
             float targetRight = _ctx.LaneOffset + passWidth;
+            targetRight = Mathf.Min(targetRight, maxWid);
             if (targetRight <= maxWid + 1.0f)
                 rightClear = IsLateralClear(t.right, lateralCheck);
 

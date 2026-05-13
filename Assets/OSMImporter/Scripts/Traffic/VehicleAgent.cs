@@ -1,8 +1,8 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.AI;
 using OSMImporter.Navigation;
+using OSMImporter.Traffic.Rules;
 
 namespace OSMImporter.Traffic
 {
@@ -21,7 +21,6 @@ namespace OSMImporter.Traffic
     ///   ⑦ VehicleMover         — di chuyển + overlap + bánh xe
     ///   ⑧ CongestionTracker    — phát hiện + báo cáo tắc nghẽn
     /// </summary>
-    [RequireComponent(typeof(NavMeshAgent))]
     public class VehicleAgent : MonoBehaviour
     {
         // ── Inspector fields ──────────────────────────────────────────────
@@ -66,6 +65,10 @@ namespace OSMImporter.Traffic
         public CongestionTracker   CongestionTracker{ get; private set; }
         public PathNavigator       Navigator        { get; private set; }
 
+        // Rule pipeline (safety constraints that sit on top of behavior modules)
+        private TrafficRulePipeline<OsmVehicleRuleContext> _rulePipeline;
+        private OsmVehicleRuleContext _ruleCtx;
+
         // ── Nested types (giữ lại cho backward compat với VehicleInspector) ──
 
         public class PathPoint
@@ -84,12 +87,6 @@ namespace OSMImporter.Traffic
                 rb = gameObject.AddComponent<Rigidbody>();
             rb.isKinematic = true;
             rb.useGravity  = false;
-
-            if (TryGetComponent<NavMeshAgent>(out var agent))
-            {
-                agent.updatePosition = false;
-                agent.updateRotation = false;
-            }
 
             int lyr = LayerMaskToLayer(VehicleLayer);
             if (lyr > 0) gameObject.layer = lyr;
@@ -142,6 +139,12 @@ namespace OSMImporter.Traffic
             CongestionTracker = new CongestionTracker(Ctx);
             Navigator         = new PathNavigator(Ctx);
 
+            // ── Khởi tạo Rule Pipeline ──
+            _ruleCtx = new OsmVehicleRuleContext(this);
+            _rulePipeline = new TrafficRulePipeline<OsmVehicleRuleContext>();
+            TrafficRuleRegistry<OsmVehicleRuleContext>.Instance.PopulateDefaults(_rulePipeline);
+            RegisterDefaultOsmRules();
+
             // ── Chọn điểm đích đầu tiên ──
             Navigator.PickNewDestination();
         }
@@ -191,8 +194,18 @@ namespace OSMImporter.Traffic
             // ⑤ Vượt xe + chuẩn bị rẽ
             OvertakeCtrl.Execute(dt);
 
+            // Enforce hard stop: EmergencyBraking cannot be overridden by later modules
+            if (Ctx.EmergencyBraking && Ctx.ReversingTimer <= 0f)
+            {
+                Ctx.DesiredSpeed = 0f;
+            }
+
             // ⑥ Anti-deadlock
             DeadlockResolver.Execute(dt);
+
+            _ruleCtx.DeltaTime = dt;
+            var commands = _rulePipeline.Execute(_ruleCtx);
+            ApplyRuleCommands(commands);
 
             // ⑦ Di chuyển + overlap + bánh xe
             Mover.Execute(dt, Wheels);
@@ -203,6 +216,75 @@ namespace OSMImporter.Traffic
             // Sync flags ngược lại cho Inspector
             IsStuck = Ctx.IsStuck;
             IsColliding = Ctx.IsColliding;
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // RULE PIPELINE — apply resolved commands from the rule pipeline
+        // ══════════════════════════════════════════════════════════════════
+
+        private void ApplyRuleCommands(TrafficRuleCommandBuffer commands)
+        {
+            if (commands.ShouldHardStop)
+            {
+                Ctx.DesiredSpeed = 0f;
+                Ctx.CurrentSpeed = 0f;
+                Ctx.EmergencyBraking = true;
+            }
+
+            if (commands.ResolvedTargetSpeed >= 0f)
+            {
+                Ctx.DesiredSpeed = Mathf.Min(Ctx.DesiredSpeed, commands.ResolvedTargetSpeed);
+            }
+
+            if (commands.ResolvedMaxSpeed < float.MaxValue)
+            {
+                Ctx.DesiredSpeed = Mathf.Min(Ctx.DesiredSpeed, commands.ResolvedMaxSpeed);
+            }
+
+            if (commands.ResolvedBrakeForce > 0f)
+            {
+                Ctx.DesiredSpeed = Mathf.Min(Ctx.DesiredSpeed,
+                    Ctx.CurrentSpeed * (1f - commands.ResolvedBrakeForce));
+            }
+
+            if (commands.IsLaneChangeDenied && Ctx.IsOvertaking)
+            {
+                Ctx.IsOvertaking = false;
+                Ctx.OvertakingTarget = null;
+                Ctx.OvertakeSide = 0f;
+                Ctx.TargetOvertakeOffset = Ctx.LaneOffset;
+                Ctx.OvertakeCooldown = 1.0f;
+            }
+
+            if (commands.ResolvedLateralOffset.HasValue)
+            {
+                float maxOff = Ctx.CurrentMaxOffset;
+                Ctx.TargetOvertakeOffset = Mathf.Clamp(commands.ResolvedLateralOffset.Value, -maxOff, maxOff);
+            }
+        }
+
+        private void RegisterDefaultOsmRules()
+        {
+            _rulePipeline.AddRule(new AvoidFrontCollisionRule());
+            _rulePipeline.AddRule(new AvoidLaneChangeCollisionRule());
+            _rulePipeline.AddRule(new MaintainSafeDistanceRule());
+            _rulePipeline.AddRule(new MaxSpeedLimitRule());
+            _rulePipeline.AddRule(new FullStopWhenTooCloseRule());
+            _rulePipeline.AddRule(new StopAtRedLightRule());
+            _rulePipeline.AddRule(new GoOnGreenLightRule());
+            _rulePipeline.AddRule(new PrepareStopYellowRule());
+            _rulePipeline.AddRule(new DoNotRunRedLightRule());
+            _rulePipeline.AddRule(new MaintainDesiredSpeedRule());
+            _rulePipeline.AddRule(new SmoothAccelerationRule());
+            _rulePipeline.AddRule(new SmoothDecelerationRule());
+            _rulePipeline.AddRule(new ClampAccelerationRule());
+            _rulePipeline.AddRule(new StableHeadingRule());
+            _rulePipeline.AddRule(new KeepCurrentLaneRule());
+            _rulePipeline.AddRule(new OvertakeLaneChangeRule());
+            _rulePipeline.AddRule(new PrepareTurnLaneChangeRule());
+            _rulePipeline.AddRule(new BlockUnsafeLaneChangeRule());
+            _rulePipeline.AddRule(new BlockedIntersectionRule());
+            _rulePipeline.AddRule(new YieldIntersectionRule());
         }
 
         // ══════════════════════════════════════════════════════════════════
