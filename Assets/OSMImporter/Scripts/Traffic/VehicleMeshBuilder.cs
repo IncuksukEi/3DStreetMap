@@ -18,9 +18,13 @@ namespace OSMImporter.Traffic
             VehicleParams p = GetParams(type);
             GameObject root = new GameObject($"Vehicle_{type}");
 
-            BuildBody(root.transform, p, bodyColor);
+            // BodyPivot handles dynamic pitch and roll suspension visual tilt
+            GameObject bodyPivot = new GameObject("BodyPivot");
+            bodyPivot.transform.SetParent(root.transform, false);
+
+            BuildBody(bodyPivot.transform, p, bodyColor);
             BuildWheels(root.transform, p);
-            BuildLights(root.transform, p, bodyColor);
+            BuildLights(bodyPivot.transform, p, bodyColor);
 
             return root;
         }
@@ -59,8 +63,25 @@ namespace OSMImporter.Traffic
 
             foreach (float z in new[] { p.L * 0.33f, -p.L * 0.33f })
             {
-                CreateCylinder(parent, "WheelL", new Vector3(-wx, wy, z), wr, wt, new Color(0.08f, 0.08f, 0.08f));
-                CreateCylinder(parent, "WheelR", new Vector3( wx, wy, z), wr, wt, new Color(0.08f, 0.08f, 0.08f));
+                bool isFront = z > 0f;
+                if (isFront)
+                {
+                    // Steerable pivots for front wheels
+                    GameObject steerL = new GameObject("SteerPivot_FL");
+                    steerL.transform.SetParent(parent, false);
+                    steerL.transform.localPosition = new Vector3(-wx, wy, z);
+                    CreateCylinder(steerL.transform, "WheelL", Vector3.zero, wr, wt, new Color(0.08f, 0.08f, 0.08f));
+
+                    GameObject steerR = new GameObject("SteerPivot_FR");
+                    steerR.transform.SetParent(parent, false);
+                    steerR.transform.localPosition = new Vector3(wx, wy, z);
+                    CreateCylinder(steerR.transform, "WheelR", Vector3.zero, wr, wt, new Color(0.08f, 0.08f, 0.08f));
+                }
+                else
+                {
+                    CreateCylinder(parent, "WheelL", new Vector3(-wx, wy, z), wr, wt, new Color(0.08f, 0.08f, 0.08f));
+                    CreateCylinder(parent, "WheelR", new Vector3( wx, wy, z), wr, wt, new Color(0.08f, 0.08f, 0.08f));
+                }
             }
         }
 

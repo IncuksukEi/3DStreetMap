@@ -125,6 +125,42 @@ namespace OSMImporter.Traffic
             // ── 6. Marker vị trí xe (xanh dương) ──
             DrawVehicleDot(SelectedVehicle.transform.position, new Color(0.2f, 0.5f, 1f, 0.9f));
 
+            // ── 7. Comfort bubble circle (cyan) ──
+            if (SelectedVehicle.Ctx != null && SelectedVehicle.Ctx.Profile != null)
+            {
+                DrawWireCircle(SelectedVehicle.transform.position + Vector3.up * 0.15f, SelectedVehicle.Ctx.Profile.ComfortWidth, new Color(0f, 1f, 1f, 0.45f), 16);
+            }
+
+            // ── 8. Pressure vectors (red lines to nearby squeezing/tailgating vehicles) ──
+            if (SelectedVehicle.Ctx != null)
+            {
+                Vector3 myPos = SelectedVehicle.transform.position;
+                float comfortDist = SelectedVehicle.Ctx.Profile.ComfortWidth;
+                Collider[] hits = Physics.OverlapSphere(myPos, 8f, SelectedVehicle.Ctx.VehicleLayer);
+                foreach (var col in hits)
+                {
+                    VehicleAgent other = col.GetComponentInParent<VehicleAgent>();
+                    if (other != null && other != SelectedVehicle && other.Ctx != null)
+                    {
+                        float dist = Vector3.Distance(myPos, other.transform.position);
+                        if (dist < comfortDist * 3.5f)
+                        {
+                            DrawLine(myPos + Vector3.up * 0.4f, other.transform.position + Vector3.up * 0.4f, new Color(1f, 0.1f, 0.1f, 0.6f));
+                        }
+                    }
+                }
+            }
+
+            // ── 9. Target gap / lateral offset direction (green) ──
+            if (SelectedVehicle.Ctx != null)
+            {
+                Vector3 myPos = SelectedVehicle.transform.position;
+                Vector3 roadDir = SelectedVehicle.transform.forward;
+                Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
+                Vector3 targetOffsetPos = myPos + right * (SelectedVehicle.Ctx.TargetOvertakeOffset - SelectedVehicle.Ctx.OvertakeOffset) + roadDir * 3f;
+                DrawLine(myPos + Vector3.up * 0.25f, targetOffsetPos + Vector3.up * 0.25f, new Color(0.2f, 0.9f, 0.2f, 0.75f));
+            }
+
             GL.PopMatrix();
         }
 
@@ -314,12 +350,12 @@ namespace OSMImporter.Traffic
         {
             if (SelectedVehicle == null) return;
 
-            float panelW = 320f, panelH = 200f;
+            float panelW = 340f, panelH = 390f;
             float x = Screen.width - panelW - 15f;
             float y = 15f;
 
             // Nền panel bán trong suốt
-            GUI.color = new Color(0, 0, 0, 0.75f);
+            GUI.color = new Color(0, 0, 0, 0.85f);
             GUI.DrawTexture(new Rect(x, y, panelW, panelH), Texture2D.whiteTexture);
             GUI.color = Color.white;
 
@@ -333,10 +369,10 @@ namespace OSMImporter.Traffic
                 fontSize = 13,
                 normal = { textColor = Color.white }
             };
-            GUIStyle smallStyle = new GUIStyle(GUI.skin.label)
+            GUIStyle accentStyle = new GUIStyle(GUI.skin.label)
             {
-                fontSize = 11,
-                normal = { textColor = new Color(0.7f, 0.7f, 0.7f) }
+                fontSize = 13, fontStyle = FontStyle.Bold,
+                normal = { textColor = Color.yellow }
             };
 
             float cy = y + 8f;
@@ -347,9 +383,9 @@ namespace OSMImporter.Traffic
             float speed = SelectedVehicle.GetCurrentSpeed();
             string pName = SelectedVehicle.Personality != null ? SelectedVehicle.Personality.Name : "Bình thường";
             GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Loại: {vType}  |  Tính cách: {pName}", infoStyle);
-            cy += 22f;
+            cy += 20f;
             GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Tốc độ hiện tại: {speed:F1} m/s", infoStyle);
-            cy += 22f;
+            cy += 20f;
 
             Vector3 startP = SelectedVehicle.GetStartPosition();
             Vector3 destP = SelectedVehicle.GetDestinationPosition();
@@ -360,7 +396,7 @@ namespace OSMImporter.Traffic
             GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"🏁 Đích:        ({destP.x:F0}, {destP.z:F0})", infoStyle);
             cy += 20f;
             GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"📏 Còn lại: {distToDest:F0}m", infoStyle);
-            cy += 22f;
+            cy += 20f;
 
             var path = SelectedVehicle.GetCurrentPath();
             int idx = SelectedVehicle.GetCurrentPathIndex();
@@ -369,6 +405,41 @@ namespace OSMImporter.Traffic
                            speed < 0.3f ? "⏸ Dừng" : "▶ Đang chạy";
             GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Waypoint: {idx}/{total}  |  {state}", infoStyle);
             cy += 22f;
+
+            if (SelectedVehicle.Ctx != null)
+            {
+                // Bổ sung Debug quyết định của Arbitrator & Tính cách tài xế
+                GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), "─── QUYẾT ĐỊNH & THÔNG SỐ AI ───", accentStyle);
+                cy += 20f;
+
+                GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Tốc độ mong muốn: {SelectedVehicle.Ctx.DesiredSpeed:F2} m/s", infoStyle);
+                cy += 20f;
+
+                float targetOff = SelectedVehicle.Ctx.TargetOvertakeOffset;
+                float currentOff = SelectedVehicle.Ctx.OvertakeOffset;
+                GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Offset lách: M.Muốn {targetOff:F2}m | Hiện tại {currentOff:F2}m", infoStyle);
+                cy += 20f;
+
+                if (SelectedVehicle.Ctx.Driver != null)
+                {
+                    var driver = SelectedVehicle.Ctx.Driver;
+                    GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Tính cách: Hung hăng {driver.Aggression:F2} | Tranh thủ {driver.Opportunism:F2}", infoStyle);
+                    cy += 20f;
+                    GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"           Quyết đoán {driver.Assertiveness:F2} | Liều lĩnh {driver.RiskTolerance:F2}", infoStyle);
+                    cy += 20f;
+                }
+
+                if (SelectedVehicle.Ctx.Profile != null)
+                {
+                    var profile = SelectedVehicle.Ctx.Profile;
+                    GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Kích thước: Rộng {profile.Width:F2}m | Khe hông an toàn {profile.ComfortWidth:F2}m", infoStyle);
+                    cy += 20f;
+                }
+
+                string honkText = SelectedVehicle.Honk != null && SelectedVehicle.Honk.IsHonking ? "BÓP CÒI INH ỎI!" : "Yên lặng";
+                GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Còi: {honkText} | Cấp kẹt: L{SelectedVehicle.Ctx.DeadlockLevel} ({SelectedVehicle.Ctx.StuckTimer:F1}s)", infoStyle);
+                cy += 20f;
+            }
 
             // Nút bỏ chọn
             GUI.color = new Color(1f, 0.3f, 0.3f, 0.9f);
@@ -391,6 +462,34 @@ namespace OSMImporter.Traffic
             }
             // LessEqual: Vẽ đúng chiều sâu không gian, không đè xuyên qua các khối nhà
             _lineMat.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.LessEqual);
+        }
+
+        // ── Vẽ các đường debug phụ trợ bằng GL ──
+
+        private void DrawLine(Vector3 a, Vector3 b, Color color)
+        {
+            _lineMat.SetPass(0);
+            GL.Begin(GL.LINES);
+            GL.Color(color);
+            GL.Vertex(a);
+            GL.Vertex(b);
+            GL.End();
+        }
+
+        private void DrawWireCircle(Vector3 center, float radius, Color color, int segments)
+        {
+            _lineMat.SetPass(0);
+            GL.Begin(GL.LINES);
+            GL.Color(color);
+            float step = 360f / segments;
+            for (int i = 0; i < segments; i++)
+            {
+                float a0 = i * step * Mathf.Deg2Rad;
+                float a1 = (i + 1) * step * Mathf.Deg2Rad;
+                GL.Vertex3(center.x + Mathf.Cos(a0) * radius, center.y, center.z + Mathf.Sin(a0) * radius);
+                GL.Vertex3(center.x + Mathf.Cos(a1) * radius, center.y, center.z + Mathf.Sin(a1) * radius);
+            }
+            GL.End();
         }
     }
 }

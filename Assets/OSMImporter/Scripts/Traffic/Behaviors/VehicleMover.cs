@@ -10,17 +10,46 @@ namespace OSMImporter.Traffic
     {
         private readonly VehicleContext _ctx;
 
+        // Visual pivot references
+        private Transform _steerPivotL;
+        private Transform _steerPivotR;
+        private Transform _bodyPivot;
+        private bool _pivotsInitialized;
+
+        // Kinematics and suspension states
+        private float _currentSteerAngle = 0f;
+        private float _prevSpeed = 0f;
+        private float _bodyPitch = 0f;
+        private float _bodyRoll = 0f;
+
         public VehicleMover(VehicleContext ctx) => _ctx = ctx;
 
         public void Execute(float dt, Transform[] wheels)
         {
+            InitializePivots();
             MoveAlongPath(dt);
             ResolveOverlap();
             SpinWheels(wheels);
+            SteerWheels();
+            UpdateBodySuspension(dt);
+        }
+
+        private void InitializePivots()
+        {
+            if (_pivotsInitialized) return;
+            _pivotsInitialized = true;
+
+            Transform t = _ctx.Transform;
+            if (t != null)
+            {
+                _steerPivotL = t.Find("SteerPivot_FL");
+                _steerPivotR = t.Find("SteerPivot_FR");
+                _bodyPivot = t.Find("BodyPivot");
+            }
         }
 
         // ══════════════════════════════════════════════════════════════════
-        // MOVE ALONG PATH — di chuyển dọc đường với lateral offset
+        // MOVE ALONG PATH — di chuyển dọc đường với Kinematic Bicycle Model
         // ══════════════════════════════════════════════════════════════════
 
         private void MoveAlongPath(float dt)
@@ -67,7 +96,7 @@ namespace OSMImporter.Traffic
 
                     _ctx.ExactPathIdx++;
 
-                    // PathIdx chỉ tăng khi WaypointRef thay đổi (điểm nội suy giữ cùng WaypointRef)
+                    // PathIdx chỉ tăng khi WaypointRef thay đổi
                     if (_ctx.ExactPathIdx < _ctx.ExactPath.Count)
                     {
                         var nextTarget = _ctx.ExactPath[_ctx.ExactPathIdx];
@@ -91,46 +120,82 @@ namespace OSMImporter.Traffic
                 }
             }
 
-            // ── Tính tốc độ — Dynamic Acceleration/Deceleration ──
-            float decelRate = _ctx.EmergencyBraking ? _ctx.BaseSpeed * _ctx.EmergencyBrakePwr : _ctx.BaseSpeed * 4f;
-            float accelRate = _ctx.DesiredSpeed > _ctx.CurrentSpeed ? _ctx.BaseSpeed * 6f : decelRate;
-            _ctx.CurrentSpeed = Mathf.MoveTowards(_ctx.CurrentSpeed, _ctx.DesiredSpeed, dt * accelRate);
+            // ── Tính tốc độ — Dynamic Acceleration/Deceleration with Inertia ──
+            float timeConstant = 0.8f; // Phản hồi tăng tốc
+            if (_ctx.EmergencyBraking)
+            {
+                timeConstant = 0.15f; // Phanh khẩn cấp cực nhanh
+            }
+            else if (_ctx.DesiredSpeed < _ctx.CurrentSpeed)
+            {
+                timeConstant = 0.45f; // Phanh thường nhanh hơn tăng tốc
+            }
 
-            if (Mathf.Abs(_ctx.CurrentSpeed) < 0.01f) return;
+            float speedDiff = _ctx.DesiredSpeed - _ctx.CurrentSpeed;
+            _ctx.CurrentSpeed += (speedDiff / timeConstant) * dt;
+
+            // Giới hạn để tránh overshoot
+            if (_ctx.DesiredSpeed > _ctx.CurrentSpeed)
+                _ctx.CurrentSpeed = Mathf.Min(_ctx.CurrentSpeed, _ctx.DesiredSpeed);
+            else
+                _ctx.CurrentSpeed = Mathf.Max(_ctx.CurrentSpeed, _ctx.DesiredSpeed);
+
+            if (Mathf.Abs(_ctx.CurrentSpeed) < 0.01f)
+            {
+                _ctx.CurrentSpeed = 0f;
+                return;
+            }
 
             // ── Hướng di chuyển + lateral offset ──
             Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
             float shiftDiff = _ctx.OvertakeOffset - _ctx.LaneOffset;
 
-            // Bổ sung chuyển động lắc lư (weaving) của lái xe đi ẩu / say rượu (Drunk/Reckless)
-            if (_ctx.Agent != null && _ctx.Agent.Personality != null && _ctx.Agent.Personality.LaneJitter > 0.01f)
+            // Bổ sung chuyển động lắc lư (weaving) - Chỉ áp dụng cho xe máy (Motorbike), ô tô và xe buýt phải đi thẳng hàng chuẩn làn
+            if (_ctx.IsMoto && _ctx.Agent != null && _ctx.Agent.Personality != null && _ctx.Agent.Personality.LaneJitter > 0.01f)
             {
                 float weave = Mathf.Sin(Time.time * 2.2f) * _ctx.Agent.Personality.LaneJitter * 0.75f;
                 shiftDiff += weave;
             }
 
             Vector3 offsetTarget = target + right * shiftDiff;
-
             Vector3 toOffset = offsetTarget - t.position;
             toOffset.y = 0f;
-            Vector3 moveDir = toOffset.normalized;
 
-            // ── Rotation ──
-            if (moveDir.sqrMagnitude > 0.001f && _ctx.CurrentSpeed > 0f)
+            // ── Mô hình Lái Xe Đạp Động Học (Kinematic Bicycle Model) ──
+            float length = 1.1f;
+            if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Bus) length = 2.5f;
+            else if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) length = 0.55f;
+            float wheelbase = length * 0.66f;
+
+            // Chuyển đích đến về hệ tọa độ cục bộ của xe
+            Vector3 localTarget = t.InverseTransformPoint(offsetTarget);
+
+            // Tính góc lái mong muốn: delta = arctan(2 * L * x / d^2)
+            float distToTarget = toOffset.magnitude;
+            float targetSteerAngle = 0f;
+            if (distToTarget > 0.1f)
             {
-                float rotSpeed = _ctx.RotationSpeed;
-                if (toOffset.sqrMagnitude < 40f) rotSpeed *= 1.5f;
-
-                Quaternion targetRot = Quaternion.LookRotation(moveDir, Vector3.up);
-                t.rotation = Quaternion.RotateTowards(t.rotation, targetRot, rotSpeed * dt);
+                float steerRad = Mathf.Atan2(2f * wheelbase * localTarget.x, toOffset.sqrMagnitude);
+                targetSteerAngle = Mathf.Clamp(steerRad * Mathf.Rad2Deg, -35f, 35f);
             }
 
-            // ── Translation — Blend steering ──
-            float speedMlt = (_ctx.CurrentSpeed >= 0f) ? 1f : -1f;
-            Vector3 moveForce = t.forward * speedMlt;
-            moveForce = Vector3.Lerp(moveForce, moveDir * speedMlt, 0.15f).normalized;
+            // Tốc độ bẻ lái vô lăng
+            float steerSpeed = 120f;
+            _currentSteerAngle = Mathf.MoveTowards(_currentSteerAngle, targetSteerAngle, dt * steerSpeed);
 
-            Vector3 displacement = moveForce * Mathf.Abs(_ctx.CurrentSpeed) * dt;
+            // Tính vận tốc góc (yaw rate = v * tan(steer) / L)
+            float steerRadActual = _currentSteerAngle * Mathf.Deg2Rad;
+            float yawRate = 0f;
+            if (Mathf.Abs(steerRadActual) > 0.001f)
+            {
+                yawRate = (_ctx.CurrentSpeed / wheelbase) * Mathf.Tan(steerRadActual);
+            }
+
+            // Xoay xe
+            t.Rotate(0f, yawRate * Mathf.Rad2Deg * dt, 0f);
+
+            // Di chuyển thuần forward (tiến hoặc lùi)
+            Vector3 displacement = t.forward * _ctx.CurrentSpeed * dt;
 
             // Pre-move collision check
             Vector3 newPos = t.position + displacement;
@@ -169,6 +234,52 @@ namespace OSMImporter.Traffic
 
             t.position += displacement;
             t.position = WithY(t.position, 0f);
+        }
+
+        // ── Steering Wheels ──
+        private void SteerWheels()
+        {
+            if (_steerPivotL != null)
+                _steerPivotL.localRotation = Quaternion.Euler(0f, _currentSteerAngle, 0f);
+            if (_steerPivotR != null)
+                _steerPivotR.localRotation = Quaternion.Euler(0f, _currentSteerAngle, 0f);
+        }
+
+        // ── Body Suspensions (Pitch & Roll) ──
+        private void UpdateBodySuspension(float dt)
+        {
+            if (_bodyPivot == null || dt < 0.001f) return;
+
+            // 1. Tính Pitch (chúc mũi khi phanh, ngóc lên khi ga)
+            float accel = (_ctx.CurrentSpeed - _prevSpeed) / dt;
+            _prevSpeed = _ctx.CurrentSpeed;
+
+            // Lọc các đột biến do teleport hoặc khựng lại quá nhanh
+            accel = Mathf.Clamp(accel, -15f, 15f);
+
+            // Phanh gấp -> pitch âm (chúc đầu).
+            float pitchTarget = accel * 1.2f; 
+            pitchTarget = Mathf.Clamp(pitchTarget, -8f, 8f);
+
+            // 2. Tính Roll (nghiêng khi cua ly tâm)
+            float length = 1.1f;
+            if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Bus) length = 2.5f;
+            else if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) length = 0.55f;
+            float wheelbase = length * 0.66f;
+
+            float steerRadActual = _currentSteerAngle * Mathf.Deg2Rad;
+            float yawRate = (_ctx.CurrentSpeed / wheelbase) * Mathf.Tan(steerRadActual);
+            float centrifugalAcc = _ctx.CurrentSpeed * yawRate;
+
+            // Nghiêng ngược hướng cua
+            float rollTarget = -centrifugalAcc * 2.2f;
+            rollTarget = Mathf.Clamp(rollTarget, -12f, 12f);
+
+            // Smooth góc nhún nghiêng
+            _bodyPitch = Mathf.MoveTowards(_bodyPitch, pitchTarget, dt * 25f);
+            _bodyRoll = Mathf.MoveTowards(_bodyRoll, rollTarget, dt * 35f);
+
+            _bodyPivot.localRotation = Quaternion.Euler(_bodyPitch, 0f, _bodyRoll);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -234,7 +345,11 @@ namespace OSMImporter.Traffic
         private void SpinWheels(Transform[] wheels)
         {
             if (wheels == null || wheels.Length == 0) return;
-            float wheelRadius = 0.75f;
+            
+            float wheelRadius = 0.11f;
+            if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Bus) wheelRadius = 0.15f;
+            else if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) wheelRadius = 0.1f;
+            
             float degPerSec = _ctx.CurrentSpeed / wheelRadius * Mathf.Rad2Deg;
             foreach (var w in wheels)
                 if (w != null) w.Rotate(0f, degPerSec * Time.deltaTime, 0f, Space.Self);

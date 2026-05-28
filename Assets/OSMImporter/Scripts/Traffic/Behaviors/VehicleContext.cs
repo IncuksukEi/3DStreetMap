@@ -19,6 +19,10 @@ namespace OSMImporter.Traffic
         public float RuntimeSpeedScale;
         public LayerMask VehicleLayer;
 
+        // ── Profiles & Personalities ──
+        public VehicleProfile Profile;
+        public DriverPersonality Driver;
+
         // ── Navigation ──
         public WaypointGraph Graph;
         public List<Waypoint> Path = new List<Waypoint>();

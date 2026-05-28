@@ -68,9 +68,16 @@ namespace OSMImporter.Traffic
         public CongestionTracker   CongestionTracker{ get; private set; }
         public PathNavigator       Navigator        { get; private set; }
 
+        public GapExploitationController GapExploitation   { get; private set; }
+        public MotorbikeController       MotorbikeCtrl     { get; private set; }
+        public IntersectionNegotiator   IntersectionNeg   { get; private set; }
+        public PressureSystem            Pressure          { get; private set; }
+        public HonkSystem                Honk              { get; private set; }
+
         // Rule pipeline (safety constraints that sit on top of behavior modules)
         private TrafficRulePipeline<OsmVehicleRuleContext> _rulePipeline;
         private OsmVehicleRuleContext _ruleCtx;
+        public BehaviorArbitrator Arbitrator { get; private set; }
 
         [HideInInspector]
         public Dictionary<string, float> RuleProbabilities = new Dictionary<string, float>();
@@ -136,6 +143,17 @@ namespace OSMImporter.Traffic
             MinFollowDistance *= Personality.MinFollowDistanceMultiplier;
             SafeReactionTime *= Personality.SafeReactionTimeMultiplier;
 
+            // ── Khởi tạo Profile và Driver Personality ──
+            var profile = VehicleProfile.CreateDefault(VehicleType);
+            var driver = DriverPersonality.CreateRandom();
+            if (Personality != null)
+            {
+                driver.Aggression = Personality.OvertakeEagerness * 0.25f;
+                driver.Patience = Personality.YieldChance * 0.01f;
+                driver.Lawfulness = 1f - Personality.RedLightRunChance * 0.01f;
+                driver.ReactionTime = Personality.SafeReactionTimeMultiplier;
+            }
+
             // ── Khởi tạo Context ──
             bool isMoto = VehicleType == VehicleMeshBuilder.VehicleType.Motorbike;
             float laneOffset = RoadUtility.GetLaneOffset(startWp.RoadType) + (isMoto ? 0.4f : 0f);
@@ -164,6 +182,8 @@ namespace OSMImporter.Traffic
                 SafeReactionTime   = SafeReactionTime,
                 EmergencyBrakePwr  = EmergencyBrakePwr,
                 Patience           = Patience,
+                Profile            = profile,
+                Driver             = driver
             };
 
             transform.position = WithY(startWp.Position);
@@ -178,9 +198,16 @@ namespace OSMImporter.Traffic
             CongestionTracker = new CongestionTracker(Ctx);
             Navigator         = new PathNavigator(Ctx);
 
-            // ── Khởi tạo Rule Pipeline ──
+            GapExploitation   = new GapExploitationController(Ctx);
+            MotorbikeCtrl     = new MotorbikeController(Ctx);
+            IntersectionNeg   = new IntersectionNegotiator(Ctx);
+            Pressure          = new PressureSystem(Ctx);
+            Honk              = new HonkSystem(Ctx);
+
+            // ── Khởi tạo Rule Pipeline & Arbitrator ──
             _ruleCtx = new OsmVehicleRuleContext(this);
             _rulePipeline = new TrafficRulePipeline<OsmVehicleRuleContext>();
+            Arbitrator = new BehaviorArbitrator();
             TrafficRuleRegistry<OsmVehicleRuleContext>.Instance.PopulateDefaults(_rulePipeline);
             RegisterDefaultOsmRules();
 
@@ -285,29 +312,63 @@ namespace OSMImporter.Traffic
 
         private void ApplyRuleCommands(TrafficRuleCommandBuffer commands)
         {
+            Arbitrator.Clear();
+
+            // Convert rule command resolutions into intermediate desires to arbitrate
             if (commands.ShouldHardStop)
             {
-                Ctx.DesiredSpeed = 0f;
-                Ctx.CurrentSpeed = 0f;
-                Ctx.EmergencyBraking = true;
-            }
-
-            if (commands.ResolvedTargetSpeed >= 0f)
-            {
-                Ctx.DesiredSpeed = Mathf.Min(Ctx.DesiredSpeed, commands.ResolvedTargetSpeed);
+                DrivingDesire d = DrivingDesire.CreateDefault("SafetyOverride");
+                d.TargetSpeed = 0f;
+                d.BrakeIntent = 1.0f;
+                d.Urgency = 1.0f;
+                d.Risk = 1.0f;
+                Arbitrator.AddDesire(d);
             }
 
             if (commands.ResolvedMaxSpeed < float.MaxValue)
             {
-                Ctx.DesiredSpeed = Mathf.Min(Ctx.DesiredSpeed, commands.ResolvedMaxSpeed);
+                DrivingDesire d = DrivingDesire.CreateDefault("MaxSpeedLimitRule");
+                d.TargetSpeed = commands.ResolvedMaxSpeed;
+                d.Urgency = 0.8f;
+                Arbitrator.AddDesire(d);
+            }
+
+            if (commands.ResolvedTargetSpeed >= 0f)
+            {
+                DrivingDesire d = DrivingDesire.CreateDefault("TargetSpeedRule");
+                d.TargetSpeed = commands.ResolvedTargetSpeed;
+                d.Urgency = 0.7f;
+                Arbitrator.AddDesire(d);
             }
 
             if (commands.ResolvedBrakeForce > 0f)
             {
-                Ctx.DesiredSpeed = Mathf.Min(Ctx.DesiredSpeed,
-                    Ctx.CurrentSpeed * (1f - commands.ResolvedBrakeForce));
+                DrivingDesire d = DrivingDesire.CreateDefault("BrakeForceRule");
+                d.BrakeIntent = commands.ResolvedBrakeForce;
+                d.TargetSpeed = Ctx.CurrentSpeed * (1f - commands.ResolvedBrakeForce);
+                d.Urgency = 0.9f;
+                Arbitrator.AddDesire(d);
             }
 
+            if (commands.ResolvedLateralOffset.HasValue)
+            {
+                DrivingDesire d = DrivingDesire.CreateDefault("LateralOffsetRule");
+                d.TargetLateralOffset = commands.ResolvedLateralOffset.Value;
+                d.Urgency = 0.6f;
+                Arbitrator.AddDesire(d);
+            }
+
+            // Execute opportunistic behaviors to add their desires before arbitration
+            if (GapExploitation != null) GapExploitation.Execute(Time.deltaTime);
+            if (MotorbikeCtrl != null) MotorbikeCtrl.Execute(Time.deltaTime);
+            if (IntersectionNeg != null) IntersectionNeg.Execute(Time.deltaTime);
+            if (Pressure != null) Pressure.Execute(Time.deltaTime);
+            if (Honk != null) Honk.Execute(Time.deltaTime);
+
+            // Arbitrate and update desired speed & lateral offsets on context
+            Arbitrator.Arbitrate(Ctx);
+
+            // Handle non-arbitrated command flags
             if (commands.IsLaneChangeDenied && Ctx.IsOvertaking)
             {
                 Ctx.IsOvertaking = false;
@@ -315,12 +376,6 @@ namespace OSMImporter.Traffic
                 Ctx.OvertakeSide = 0f;
                 Ctx.TargetOvertakeOffset = Ctx.LaneOffset;
                 Ctx.OvertakeCooldown = 1.0f;
-            }
-
-            if (commands.ResolvedLateralOffset.HasValue)
-            {
-                float maxOff = Ctx.CurrentMaxOffset;
-                Ctx.TargetOvertakeOffset = Mathf.Clamp(commands.ResolvedLateralOffset.Value, -maxOff, maxOff);
             }
         }
 
@@ -360,6 +415,9 @@ namespace OSMImporter.Traffic
             AddRuleWithProbability(new BlockUnsafeLaneChangeRule());
             AddRuleWithProbability(new BlockedIntersectionRule());
             AddRuleWithProbability(new YieldIntersectionRule());
+
+            // Safe reverse checking rule
+            AddRuleWithProbability(new ReverseReluctanceRule());
         }
 
         // ══════════════════════════════════════════════════════════════════
