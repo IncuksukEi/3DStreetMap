@@ -6,20 +6,45 @@ namespace OSMImporter.Traffic
     /// </summary>
     public static class RoadUtility
     {
+        public const float SidewalkRatio = 0.15f; // 15% of road base width is sidewalk on each side
+
+        public static float GetRoadBaseWidth(string roadType)
+        {
+            if (string.IsNullOrEmpty(roadType)) return 4.0f;
+            switch (roadType.ToLower())
+            {
+                case "motorway":      return 12f;
+                case "trunk":         return 10f;
+                case "primary":       return 8f;
+                case "secondary":     return 7f;
+                case "tertiary":      return 6f;
+                case "residential":   return 5f;
+                case "service":       return 3f;
+                case "footway":       return 2f;
+                case "pedestrian":    return 3f;
+                case "path":          return 1.5f;
+                case "cycleway":      return 2f;
+                case "living_street": return 4f;
+                case "unclassified":  return 5f;
+                default:              return 4.0f;
+            }
+        }
+
+        public static float GetSidewalkWidth(string roadType)
+        {
+            return GetRoadBaseWidth(roadType) * SidewalkRatio;
+        }
+
+        public static float GetTotalMeshWidth(string roadType)
+        {
+            float baseW = GetRoadBaseWidth(roadType);
+            return baseW + 2f * (baseW * SidewalkRatio);
+        }
+
         public static float GetMaxOffset(string roadType)
         {
-            if (string.IsNullOrEmpty(roadType)) return 2.0f;
-            switch (roadType)
-            {
-                case "motorway":      return 4.5f;
-                case "trunk":         return 3.5f;
-                case "primary":       return 3.0f;
-                case "secondary":     return 2.5f;
-                case "tertiary":      return 2.0f;
-                case "residential":   return 1.5f;
-                case "living_street": return 1.0f;
-                default:              return 2.0f;
-            }
+            // MaxOffset represents the boundary of the driving carriageway (road base half width)
+            return GetRoadBaseWidth(roadType) / 2f;
         }
 
         public static float GetLaneOffset(string roadType)

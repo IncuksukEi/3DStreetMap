@@ -4,6 +4,7 @@ using Unity.AI.Navigation;
 using UnityEngine.AI;
 using OSMImporter.Data;
 using OSMImporter.Geo;
+using OSMImporter.Traffic;
 
 namespace OSMImporter.Generators
 {
@@ -38,12 +39,17 @@ namespace OSMImporter.Generators
                 if (positions.Count < 2) continue;
 
                 float width = DefaultRoadWidths.TryGetValue(way.HighwayType, out float w) ? w : 4f;
-                GameObject roadObj = CreateRoadMesh(way.Id, positions, (width * widthMultiplier) / 2f, material);
+                float baseW = width * widthMultiplier;
+                // Vỉa hè được mở rộng thêm một lượng tỷ lệ với lòng đường (sidewalk on each side)
+                float sidewalkW = baseW * RoadUtility.SidewalkRatio;
+                float halfMeshWidth = (baseW + 2f * sidewalkW) / 2f;
+
+                GameObject roadObj = CreateRoadMesh(way.Id, positions, halfMeshWidth, material);
                 roadObj.transform.SetParent(parent, false);
                 roadObj.name = $"Road_{way.Id}_{way.HighwayType}";
                 roads.Add(roadObj);
                 
-                float totalW = width * widthMultiplier;
+                float totalW = baseW;
                 // Vẽ lane markings cho đường đủ rộng
                 if (totalW >= 4f)
                 {
@@ -58,12 +64,12 @@ namespace OSMImporter.Generators
                     centerLine.transform.SetParent(roadObj.transform, false);
                     centerLine.name = $"CenterLine_{way.Id}";
                     
-                    // Edge lines (trắng) — hai bên mép đường
+                    // Edge lines (trắng) — hai bên mép đường (là ranh giới giữa lòng đường và vỉa hè)
                     Material edgeMat = new Material(Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard"));
                     edgeMat.color = Color.white;
                     if (edgeMat.HasProperty("_BaseColor")) edgeMat.SetColor("_BaseColor", Color.white);
                     
-                    float edgeOffset = (totalW / 2f) - 0.3f; // gần mép đường
+                    float edgeOffset = totalW / 2f; // Ranh giới lòng đường - vỉa hè
                     
                     // Tạo offset positions cho mép trái và phải
                     var leftEdgePositions  = OffsetPolyline(positions, -edgeOffset);

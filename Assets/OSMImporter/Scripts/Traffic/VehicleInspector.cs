@@ -314,7 +314,7 @@ namespace OSMImporter.Traffic
         {
             if (SelectedVehicle == null) return;
 
-            float panelW = 320f, panelH = 180f;
+            float panelW = 320f, panelH = 200f;
             float x = Screen.width - panelW - 15f;
             float y = 15f;
 
@@ -345,7 +345,10 @@ namespace OSMImporter.Traffic
 
             string vType = SelectedVehicle.VehicleType.ToString();
             float speed = SelectedVehicle.GetCurrentSpeed();
-            GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Loại: {vType}  |  Tốc độ: {speed:F1} m/s", infoStyle);
+            string pName = SelectedVehicle.Personality != null ? SelectedVehicle.Personality.Name : "Bình thường";
+            GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Loại: {vType}  |  Tính cách: {pName}", infoStyle);
+            cy += 22f;
+            GUI.Label(new Rect(x + 10, cy, panelW - 20, 20), $"Tốc độ hiện tại: {speed:F1} m/s", infoStyle);
             cy += 22f;
 
             Vector3 startP = SelectedVehicle.GetStartPosition();

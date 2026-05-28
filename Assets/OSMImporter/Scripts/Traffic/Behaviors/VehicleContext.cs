@@ -39,6 +39,8 @@ namespace OSMImporter.Traffic
         public float ReversingTimer;
         public float RedLightStopDist;
         public float RedLightWaitTimer;
+        public long LastSeenLightId;
+        public bool DecidedToViolateLight;
 
         // ── Scan results ──
         public VehicleAgent AheadVehicle;
@@ -82,8 +84,18 @@ namespace OSMImporter.Traffic
             PathIdx < Path.Count ? Path[PathIdx].RoadType : "";
 
         /// <summary>
-        /// Max offset tại waypoint hiện tại.
+        /// Max offset tại waypoint hiện tại, trừ đi một nửa chiều rộng xe để xe không tràn ra ngoài vỉa hè.
         /// </summary>
-        public float CurrentMaxOffset => RoadUtility.GetMaxOffset(CurrentRoadType);
+        public float CurrentMaxOffset
+        {
+            get
+            {
+                float baseMax = RoadUtility.GetMaxOffset(CurrentRoadType);
+                float spill = (Agent != null && Agent.Personality != null) ? Agent.Personality.SidewalkSpill : 0f;
+                // Giới hạn max offset lùi vào một nửa thân xe để giữ xe hoàn toàn trong vạch trắng (lòng đường).
+                // Các tính cách "đi ẩu" (Reckless/DeliveryMoto) có spill lớn sẽ được phép đè vạch/lên vỉa hè một chút.
+                return Mathf.Max(0.2f, baseMax - (VehicleWidth * 0.5f + 0.1f) + spill);
+            }
+        }
     }
 }

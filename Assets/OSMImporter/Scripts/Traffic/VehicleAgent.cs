@@ -36,6 +36,9 @@ namespace OSMImporter.Traffic
         [HideInInspector] public bool                       IsColliding;
         [HideInInspector] public bool                       IsStuck;
 
+        [Header("Personality Settings")]
+        public VehiclePersonality Personality;
+
         [Header("Steering & Behaviors")]
         public float RotationSpeed  = 240f;
         public float StopDistance   = 6f;
@@ -69,6 +72,9 @@ namespace OSMImporter.Traffic
         private TrafficRulePipeline<OsmVehicleRuleContext> _rulePipeline;
         private OsmVehicleRuleContext _ruleCtx;
 
+        [HideInInspector]
+        public Dictionary<string, float> RuleProbabilities = new Dictionary<string, float>();
+
         // ── Nested types (giữ lại cho backward compat với VehicleInspector) ──
 
         public class PathPoint
@@ -83,6 +89,13 @@ namespace OSMImporter.Traffic
 
         private void Start()
         {
+            if (Ctx != null) return; // Đã khởi tạo thủ công qua InitWithCustomRoute
+
+            InitializeAgent(null, null);
+        }
+
+        private void InitializeAgent(Waypoint customStart, Waypoint customDest)
+        {
             if (!TryGetComponent<Rigidbody>(out var rb))
                 rb = gameObject.AddComponent<Rigidbody>();
             rb.isKinematic = true;
@@ -94,12 +107,38 @@ namespace OSMImporter.Traffic
             if (Graph == null) Graph = FindFirstObjectByType<WaypointGraph>();
             if (Graph == null || Graph.Waypoints.Count == 0) { enabled = false; return; }
 
-            Waypoint nearest = Graph.FindNearest(transform.position);
-            if (nearest == null) { enabled = false; return; }
+            Waypoint startWp = customStart;
+            if (startWp == null)
+            {
+                startWp = Graph.FindNearest(transform.position);
+            }
+            if (startWp == null) { enabled = false; return; }
+
+            // ── Khởi tạo Tính cách (Personality) ──
+            if (Personality == null)
+            {
+                if (TrafficSpawner.Instance != null && TrafficSpawner.Instance.PersonalitiesList.Count > 0)
+                {
+                    int randIdx = Random.Range(0, TrafficSpawner.Instance.PersonalitiesList.Count);
+                    Personality = TrafficSpawner.Instance.PersonalitiesList[randIdx].Clone();
+                }
+                else
+                {
+                    int randIdx = Random.Range(0, TrafficSpawner.PredefinedPersonalities.Count);
+                    Personality = TrafficSpawner.PredefinedPersonalities[randIdx].Clone();
+                }
+                Personality.Jitter(0.08f);
+            }
+
+            // Áp dụng các tỷ lệ multiplier từ tính cách
+            BaseSpeed *= Personality.SpeedMultiplier;
+            MaxSpeedLimit *= Personality.SpeedMultiplier;
+            MinFollowDistance *= Personality.MinFollowDistanceMultiplier;
+            SafeReactionTime *= Personality.SafeReactionTimeMultiplier;
 
             // ── Khởi tạo Context ──
             bool isMoto = VehicleType == VehicleMeshBuilder.VehicleType.Motorbike;
-            float laneOffset = RoadUtility.GetLaneOffset(nearest.RoadType) + (isMoto ? 0.4f : 0f);
+            float laneOffset = RoadUtility.GetLaneOffset(startWp.RoadType) + (isMoto ? 0.4f : 0f);
 
             Ctx = new VehicleContext
             {
@@ -111,7 +150,7 @@ namespace OSMImporter.Traffic
                 RuntimeSpeedScale  = RuntimeSpeedScale,
                 VehicleLayer       = VehicleLayer,
                 Graph              = Graph,
-                StartNodeId        = nearest.OSMNodeId,
+                StartNodeId        = startWp.OSMNodeId,
                 CurrentSpeed       = BaseSpeed,
                 DesiredSpeed       = BaseSpeed,
                 LaneOffset         = laneOffset,
@@ -127,7 +166,7 @@ namespace OSMImporter.Traffic
                 Patience           = Patience,
             };
 
-            transform.position = WithY(nearest.Position);
+            transform.position = WithY(startWp.Position);
 
             // ── Khởi tạo Behavior Modules ──
             Sensor            = new ObstacleSensor(Ctx);
@@ -146,7 +185,29 @@ namespace OSMImporter.Traffic
             RegisterDefaultOsmRules();
 
             // ── Chọn điểm đích đầu tiên ──
-            Navigator.PickNewDestination();
+            if (customDest != null)
+            {
+                Ctx.DestNodeId = customDest.OSMNodeId;
+                var candidatePath = Graph.FindPath(Ctx.StartNodeId, Ctx.DestNodeId, true);
+                if (candidatePath != null && candidatePath.Count > 0)
+                {
+                    Ctx.Path = candidatePath;
+                    Navigator.BuildExactPath(candidatePath);
+                }
+                else
+                {
+                    Navigator.PickNewDestination();
+                }
+            }
+            else
+            {
+                Navigator.PickNewDestination();
+            }
+        }
+
+        public void InitWithCustomRoute(Waypoint startWp, Waypoint destWp)
+        {
+            InitializeAgent(startWp, destWp);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -263,28 +324,42 @@ namespace OSMImporter.Traffic
             }
         }
 
+        private void AddRuleWithProbability(ITrafficRule<OsmVehicleRuleContext> rule)
+        {
+            float prob = 100f; // default 100%
+            if (RuleProbabilities != null && RuleProbabilities.TryGetValue(rule.RuleId, out float p))
+            {
+                prob = p;
+            }
+
+            if (Random.Range(0f, 100f) < prob)
+            {
+                _rulePipeline.AddRule(rule);
+            }
+        }
+
         private void RegisterDefaultOsmRules()
         {
-            _rulePipeline.AddRule(new AvoidFrontCollisionRule());
-            _rulePipeline.AddRule(new AvoidLaneChangeCollisionRule());
-            _rulePipeline.AddRule(new MaintainSafeDistanceRule());
-            _rulePipeline.AddRule(new MaxSpeedLimitRule());
-            _rulePipeline.AddRule(new FullStopWhenTooCloseRule());
-            _rulePipeline.AddRule(new StopAtRedLightRule());
-            _rulePipeline.AddRule(new GoOnGreenLightRule());
-            _rulePipeline.AddRule(new PrepareStopYellowRule());
-            _rulePipeline.AddRule(new DoNotRunRedLightRule());
-            _rulePipeline.AddRule(new MaintainDesiredSpeedRule());
-            _rulePipeline.AddRule(new SmoothAccelerationRule());
-            _rulePipeline.AddRule(new SmoothDecelerationRule());
-            _rulePipeline.AddRule(new ClampAccelerationRule());
-            _rulePipeline.AddRule(new StableHeadingRule());
-            _rulePipeline.AddRule(new KeepCurrentLaneRule());
-            _rulePipeline.AddRule(new OvertakeLaneChangeRule());
-            _rulePipeline.AddRule(new PrepareTurnLaneChangeRule());
-            _rulePipeline.AddRule(new BlockUnsafeLaneChangeRule());
-            _rulePipeline.AddRule(new BlockedIntersectionRule());
-            _rulePipeline.AddRule(new YieldIntersectionRule());
+            AddRuleWithProbability(new AvoidFrontCollisionRule());
+            AddRuleWithProbability(new AvoidLaneChangeCollisionRule());
+            AddRuleWithProbability(new MaintainSafeDistanceRule());
+            AddRuleWithProbability(new MaxSpeedLimitRule());
+            AddRuleWithProbability(new FullStopWhenTooCloseRule());
+            AddRuleWithProbability(new StopAtRedLightRule());
+            AddRuleWithProbability(new GoOnGreenLightRule());
+            AddRuleWithProbability(new PrepareStopYellowRule());
+            AddRuleWithProbability(new DoNotRunRedLightRule());
+            AddRuleWithProbability(new MaintainDesiredSpeedRule());
+            AddRuleWithProbability(new SmoothAccelerationRule());
+            AddRuleWithProbability(new SmoothDecelerationRule());
+            AddRuleWithProbability(new ClampAccelerationRule());
+            AddRuleWithProbability(new StableHeadingRule());
+            AddRuleWithProbability(new KeepCurrentLaneRule());
+            AddRuleWithProbability(new OvertakeLaneChangeRule());
+            AddRuleWithProbability(new PrepareTurnLaneChangeRule());
+            AddRuleWithProbability(new BlockUnsafeLaneChangeRule());
+            AddRuleWithProbability(new BlockedIntersectionRule());
+            AddRuleWithProbability(new YieldIntersectionRule());
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -362,5 +437,69 @@ namespace OSMImporter.Traffic
             Gizmos.DrawWireSphere(transform.position, 25f);
         }
 #endif
+    }
+
+    [System.Serializable]
+    public class VehiclePersonality
+    {
+        public string Name;
+        
+        [Range(0.5f, 2.0f)]
+        public float SpeedMultiplier = 1.0f;
+        
+        [Range(0.2f, 2.0f)]
+        public float MinFollowDistanceMultiplier = 1.0f;
+        
+        [Range(0.2f, 2.0f)]
+        public float SafeReactionTimeMultiplier = 1.0f;
+        
+        [Range(0.0f, 4.0f)]
+        public float OvertakeEagerness = 1.0f;
+        
+        [Range(0f, 100f)]
+        public float RedLightRunChance = 0f;
+        
+        [Range(0f, 100f)]
+        public float YellowLightRunChance = 10f;
+        
+        [Range(0f, 100f)]
+        public float YieldChance = 90f;
+        
+        [Range(0f, 1f)]
+        public float SidewalkSpill = 0f; // 0 = stay inside white lines, larger = can go onto sidewalk slightly
+
+        [Range(0f, 1f)]
+        public float LaneJitter = 0f; // Jitter from center of lane (weaving/drunk-like behavior)
+
+        public VehiclePersonality Clone()
+        {
+            return new VehiclePersonality
+            {
+                Name = this.Name,
+                SpeedMultiplier = this.SpeedMultiplier,
+                MinFollowDistanceMultiplier = this.MinFollowDistanceMultiplier,
+                SafeReactionTimeMultiplier = this.SafeReactionTimeMultiplier,
+                OvertakeEagerness = this.OvertakeEagerness,
+                RedLightRunChance = this.RedLightRunChance,
+                YellowLightRunChance = this.YellowLightRunChance,
+                YieldChance = this.YieldChance,
+                SidewalkSpill = this.SidewalkSpill,
+                LaneJitter = this.LaneJitter
+            };
+        }
+
+        public void Jitter(float factor = 0.1f)
+        {
+            SpeedMultiplier += Random.Range(-factor, factor);
+            MinFollowDistanceMultiplier += Random.Range(-factor, factor);
+            SafeReactionTimeMultiplier += Random.Range(-factor, factor);
+            OvertakeEagerness += Random.Range(-factor * 2f, factor * 2f);
+            
+            // Keep parameters in reasonable limits
+            SpeedMultiplier = Mathf.Clamp(SpeedMultiplier, 0.4f, 2.5f);
+            MinFollowDistanceMultiplier = Mathf.Clamp(MinFollowDistanceMultiplier, 0.15f, 2.5f);
+            SafeReactionTimeMultiplier = Mathf.Clamp(SafeReactionTimeMultiplier, 0.15f, 2.5f);
+            OvertakeEagerness = Mathf.Clamp(OvertakeEagerness, 0.0f, 5.0f);
+        }
     }
 }

@@ -101,6 +101,14 @@ namespace OSMImporter.Traffic
             // ── Hướng di chuyển + lateral offset ──
             Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
             float shiftDiff = _ctx.OvertakeOffset - _ctx.LaneOffset;
+
+            // Bổ sung chuyển động lắc lư (weaving) của lái xe đi ẩu / say rượu (Drunk/Reckless)
+            if (_ctx.Agent != null && _ctx.Agent.Personality != null && _ctx.Agent.Personality.LaneJitter > 0.01f)
+            {
+                float weave = Mathf.Sin(Time.time * 2.2f) * _ctx.Agent.Personality.LaneJitter * 0.75f;
+                shiftDiff += weave;
+            }
+
             Vector3 offsetTarget = target + right * shiftDiff;
 
             Vector3 toOffset = offsetTarget - t.position;

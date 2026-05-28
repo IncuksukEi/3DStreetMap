@@ -51,6 +51,24 @@ namespace OSMImporter.Traffic
                 TrafficLightTrigger trigger = col.GetComponent<TrafficLightTrigger>();
                 if (trigger == null || trigger.IsGreen) continue;
 
+                // Kiểm tra tính cách đi ẩu vượt đèn (Yellow/Red light run)
+                if (_ctx.LastSeenLightId != trigger.GetInstanceID())
+                {
+                    _ctx.LastSeenLightId = trigger.GetInstanceID();
+                    float runChance = 0f;
+                    if (_ctx.Agent != null && _ctx.Agent.Personality != null)
+                    {
+                        runChance = trigger.IsYellow ? _ctx.Agent.Personality.YellowLightRunChance : _ctx.Agent.Personality.RedLightRunChance;
+                    }
+                    _ctx.DecidedToViolateLight = Random.Range(0f, 100f) < runChance;
+                }
+
+                if (_ctx.DecidedToViolateLight)
+                {
+                    // "Đi ẩu" — Bỏ qua và vượt luôn đèn này
+                    continue;
+                }
+
                 float dot = Vector3.Dot(t.forward, trigger.ApproachDir);
                 if (dot < 0.4f) continue;
 
@@ -149,9 +167,19 @@ namespace OSMImporter.Traffic
 
                 if (shouldYield)
                 {
-                    float conf = _ctx.Agent.Sensor.CalcConfidence(other, Vector3.Distance(t.position, other.transform.position));
-                    conf *= 0.8f;
-                    maxYieldConfidence = Mathf.Max(maxYieldConfidence, conf);
+                    bool willYield = true;
+                    if (_ctx.Agent != null && _ctx.Agent.Personality != null)
+                    {
+                        // Kiểm tra khả năng nhường đường của tính cách (YieldChance)
+                        willYield = Random.Range(0f, 100f) < _ctx.Agent.Personality.YieldChance;
+                    }
+
+                    if (willYield)
+                    {
+                        float conf = _ctx.Agent.Sensor.CalcConfidence(other, Vector3.Distance(t.position, other.transform.position));
+                        conf *= 0.8f;
+                        maxYieldConfidence = Mathf.Max(maxYieldConfidence, conf);
+                    }
                 }
             }
 

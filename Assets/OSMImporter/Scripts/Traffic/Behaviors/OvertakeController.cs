@@ -157,13 +157,14 @@ namespace OSMImporter.Traffic
             if (_ctx.OvertakeCooldown > 0f || _ctx.AheadVehicle == null || _ctx.AheadVehicle.Ctx == null || _ctx.IsWaitingAtRedLight || isNearIntersection)
                 return;
 
-            float overtakeRange = isMoto ? OVERTAKE_RANGE * 1.8f : OVERTAKE_RANGE;
+            float eagerness = (_ctx.Agent != null && _ctx.Agent.Personality != null) ? _ctx.Agent.Personality.OvertakeEagerness : 1.0f;
+            float overtakeRange = (isMoto ? OVERTAKE_RANGE * 1.8f : OVERTAKE_RANGE) * eagerness;
             var ahead = _ctx.AheadVehicle;
 
             bool shouldOvertake = _ctx.AheadDistance < overtakeRange
-                && (ahead.Ctx.CurrentSpeed < _ctx.BaseSpeed * OVERTAKE_SPEED_RATIO
+                && (ahead.Ctx.CurrentSpeed < _ctx.BaseSpeed * OVERTAKE_SPEED_RATIO * eagerness
                     || ahead.Ctx.CurrentSpeed < 0.5f
-                    || (isMoto && ahead.Ctx.CurrentSpeed < _ctx.BaseSpeed * 0.95f));
+                    || (isMoto && ahead.Ctx.CurrentSpeed < _ctx.BaseSpeed * 0.95f * eagerness));
 
             if (!shouldOvertake) return;
 
