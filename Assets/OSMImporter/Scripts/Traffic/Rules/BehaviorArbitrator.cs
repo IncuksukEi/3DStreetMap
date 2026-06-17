@@ -30,9 +30,9 @@ namespace OSMImporter.Traffic.Rules
             {
                 ctx.Braking = false;
                 ctx.EmergencyBraking = false;
-                float maxOff = ctx.CurrentMaxOffset;
-                float minOff = ctx.CurrentMinOffset;
-                ctx.TargetOvertakeOffset = Mathf.Clamp(ctx.TargetOvertakeOffset, minOff, maxOff);
+                float currentMax = ctx.CurrentMaxOffset;
+                float currentMin = ctx.CurrentMinOffset;
+                ctx.TargetOvertakeOffset = Mathf.Clamp(ctx.TargetOvertakeOffset, currentMin, currentMax);
                 return;
             }
 
