@@ -114,6 +114,8 @@ namespace OSMImporter.Traffic
         // ── private ───────────────────────────────────────────────────────────
         private readonly List<VehicleAgent> _agents = new List<VehicleAgent>();
         private int _vehicleLayer;
+        private Vector3 _mapCenter = Vector3.zero;
+        private float _mapRadius = 100f;
 
         public static TrafficSpawner Instance;
         [HideInInspector] public List<Transform> Buildings = new List<Transform>();
@@ -151,26 +153,29 @@ namespace OSMImporter.Traffic
         {
             RuleProbabilities = new List<RuleConfig>
             {
-                new RuleConfig { RuleId = "B1", RuleName = "Avoid Front Collision", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B2", RuleName = "Avoid Lane Change Collision", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B3", RuleName = "Maintain Safe Distance", ApplyProbability = 90f },
-                new RuleConfig { RuleId = "B4", RuleName = "Max Speed Limit", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B5", RuleName = "Full Stop When Too Close", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B6", RuleName = "Stop At Red Light", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B7", RuleName = "Go On Green Light", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B8", RuleName = "Prepare Stop Yellow", ApplyProbability = 80f },
-                new RuleConfig { RuleId = "B9", RuleName = "Do Not Run Red Light", ApplyProbability = 98f },
-                new RuleConfig { RuleId = "B10", RuleName = "Maintain Desired Speed", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B11", RuleName = "Smooth Acceleration", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B12", RuleName = "Smooth Deceleration", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B13", RuleName = "Clamp Acceleration", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B14", RuleName = "Stable Heading", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B15", RuleName = "Keep Current Lane", ApplyProbability = 85f },
-                new RuleConfig { RuleId = "B16", RuleName = "Overtake Lane Change", ApplyProbability = 75f },
-                new RuleConfig { RuleId = "B17", RuleName = "Prepare Turn Lane Change", ApplyProbability = 90f },
-                new RuleConfig { RuleId = "B18", RuleName = "Block Unsafe Lane Change", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B19", RuleName = "Blocked Intersection", ApplyProbability = 85f },
-                new RuleConfig { RuleId = "B20", RuleName = "Yield Intersection", ApplyProbability = 90f }
+                // ── Nhóm vật lý/hệ thống (100%) — không thể vi phạm ──
+                new RuleConfig { RuleId = "B1",  RuleName = "Avoid Front Collision",      ApplyProbability = 100f },
+                new RuleConfig { RuleId = "B5",  RuleName = "Full Stop When Too Close",    ApplyProbability = 100f },
+                new RuleConfig { RuleId = "B7",  RuleName = "Go On Green Light",           ApplyProbability = 100f },
+                new RuleConfig { RuleId = "B10", RuleName = "Maintain Desired Speed",      ApplyProbability = 100f },
+                new RuleConfig { RuleId = "B13", RuleName = "Clamp Acceleration",          ApplyProbability = 100f },
+
+                // ── Nhóm tuân thủ 90% — 10% xe là ngoại lệ vi phạm ──
+                new RuleConfig { RuleId = "B2",  RuleName = "Avoid Lane Change Collision", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B3",  RuleName = "Maintain Safe Distance",      ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B4",  RuleName = "Max Speed Limit",             ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B6",  RuleName = "Stop At Red Light",           ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B8",  RuleName = "Prepare Stop Yellow",         ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B9",  RuleName = "Do Not Run Red Light",        ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B11", RuleName = "Smooth Acceleration",         ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B12", RuleName = "Smooth Deceleration",         ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B14", RuleName = "Stable Heading",              ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B15", RuleName = "Keep Current Lane",           ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B16", RuleName = "Overtake Lane Change",        ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B17", RuleName = "Prepare Turn Lane Change",    ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B18", RuleName = "Block Unsafe Lane Change",    ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B19", RuleName = "Blocked Intersection",        ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B20", RuleName = "Yield Intersection",          ApplyProbability = 90f }
             };
         }
 
@@ -178,12 +183,15 @@ namespace OSMImporter.Traffic
         {
             RoadConfigs = new List<RoadTypeSpawnConfig>
             {
-                new RoadTypeSpawnConfig { RoadType = "motorway", SpawnWeight = 8f, CarRatio = 70f, MotoRatio = 20f, BusRatio = 10f },
-                new RoadTypeSpawnConfig { RoadType = "primary", SpawnWeight = 5f, CarRatio = 45f, MotoRatio = 40f, BusRatio = 15f },
-                new RoadTypeSpawnConfig { RoadType = "secondary", SpawnWeight = 3f, CarRatio = 30f, MotoRatio = 60f, BusRatio = 10f },
-                new RoadTypeSpawnConfig { RoadType = "tertiary", SpawnWeight = 2f, CarRatio = 20f, MotoRatio = 75f, BusRatio = 5f },
-                new RoadTypeSpawnConfig { RoadType = "residential", SpawnWeight = 1f, CarRatio = 10f, MotoRatio = 90f, BusRatio = 0f },
-                new RoadTypeSpawnConfig { RoadType = "service", SpawnWeight = 0.5f, CarRatio = 5f, MotoRatio = 95f, BusRatio = 0f }
+                new RoadTypeSpawnConfig { RoadType = "motorway", SpawnWeight = 2f, CarRatio = 80f, MotoRatio = 0f, BusRatio = 20f },
+                new RoadTypeSpawnConfig { RoadType = "trunk", SpawnWeight = 6f, CarRatio = 35f, MotoRatio = 60f, BusRatio = 5f },
+                new RoadTypeSpawnConfig { RoadType = "primary", SpawnWeight = 7f, CarRatio = 20f, MotoRatio = 75f, BusRatio = 5f },
+                new RoadTypeSpawnConfig { RoadType = "secondary", SpawnWeight = 6f, CarRatio = 15f, MotoRatio = 80f, BusRatio = 5f },
+                new RoadTypeSpawnConfig { RoadType = "tertiary", SpawnWeight = 5f, CarRatio = 10f, MotoRatio = 87f, BusRatio = 3f },
+                new RoadTypeSpawnConfig { RoadType = "residential", SpawnWeight = 4f, CarRatio = 5f, MotoRatio = 95f, BusRatio = 0f },
+                new RoadTypeSpawnConfig { RoadType = "living_street", SpawnWeight = 3f, CarRatio = 3f, MotoRatio = 97f, BusRatio = 0f },
+                new RoadTypeSpawnConfig { RoadType = "service", SpawnWeight = 2f, CarRatio = 2f, MotoRatio = 98f, BusRatio = 0f },
+                new RoadTypeSpawnConfig { RoadType = "unclassified", SpawnWeight = 3f, CarRatio = 10f, MotoRatio = 90f, BusRatio = 0f }
             };
         }
 
@@ -201,6 +209,28 @@ namespace OSMImporter.Traffic
                 Debug.LogWarning("[TrafficSpawner] No WaypointGraph found — generate the OSM map first.");
                 enabled = false;
                 return;
+            }
+
+            // Đồng bộ hệ số chiều rộng đường giữa mesh và traffic system
+            RoadUtility.WidthMultiplier = Graph.RoadWidthMultiplier;
+
+            // Tính toán tâm bản đồ và bán kính bản đồ để ưu tiên spawn ở giữa
+            if (Graph.Waypoints.Count > 0)
+            {
+                Vector3 sum = Vector3.zero;
+                foreach (var wp in Graph.Waypoints.Values)
+                {
+                    sum += wp.Position;
+                }
+                _mapCenter = sum / Graph.Waypoints.Count;
+
+                float maxDistSq = 0f;
+                foreach (var wp in Graph.Waypoints.Values)
+                {
+                    float d = (wp.Position - _mapCenter).sqrMagnitude;
+                    if (d > maxDistSq) maxDistSq = d;
+                }
+                _mapRadius = Mathf.Sqrt(maxDistSq);
             }
 
             // Lấy toàn bộ toà nhà trong scene làm điểm Spawn/End
@@ -230,6 +260,11 @@ namespace OSMImporter.Traffic
             {
                 var tlm = gameObject.AddComponent<TrafficLightManager>();
                 tlm.Graph = Graph;
+            }
+
+            if (GetComponent<PedestrianScenario>() == null)
+            {
+                gameObject.AddComponent<PedestrianScenario>();
             }
 
             // Auto-attach VehicleInspector vào Main Camera để click xem xe
@@ -278,6 +313,35 @@ namespace OSMImporter.Traffic
         }
 
         // ── Spawn ─────────────────────────────────────────────────────────────
+
+        private VehiclePersonality GetRandomPersonality()
+        {
+            if (PersonalitiesList == null || PersonalitiesList.Count == 0) return null;
+
+            var normalList = new List<VehiclePersonality>();
+            var specialList = new List<VehiclePersonality>();
+
+            foreach (var p in PersonalitiesList)
+            {
+                string name = p.Name.ToLower();
+                if (name.Contains("normal") || name.Contains("lawabiding") || name.Contains("cautious") || 
+                    name.Contains("polite") || name.Contains("busdriver") || name.Contains("student") || name.Contains("elderly"))
+                {
+                    normalList.Add(p);
+                }
+                else
+                {
+                    specialList.Add(p);
+                }
+            }
+
+            if (normalList.Count == 0) normalList = PersonalitiesList;
+            if (specialList.Count == 0) specialList = PersonalitiesList;
+
+            // 90% xe đi chuẩn theo luật, 10% xe đi ẩu/đặc biệt
+            var targetList = (Random.value <= 0.90f) ? normalList : specialList;
+            return targetList[Random.Range(0, targetList.Count)].Clone();
+        }
 
         private void SpawnAll()
         {
@@ -344,11 +408,10 @@ namespace OSMImporter.Traffic
             agent.PreferredLane = lane;
             agent.Patience      = Random.Range(3f, 8f);
 
-            // Gán tính cách ngẫu nhiên từ PersonalitiesList và Jitter nhẹ
-            if (PersonalitiesList != null && PersonalitiesList.Count > 0)
+            // Gán tính cách theo tỷ lệ 90% bình thường, 10% đặc biệt và Jitter nhẹ
+            VehiclePersonality p = GetRandomPersonality();
+            if (p != null)
             {
-                int pIdx = Random.Range(0, PersonalitiesList.Count);
-                VehiclePersonality p = PersonalitiesList[pIdx].Clone();
                 p.Jitter(0.08f);
                 agent.Personality = p;
             }
@@ -362,6 +425,7 @@ namespace OSMImporter.Traffic
                 }
             }
 
+            agent.InitWithCustomRoute(wp, null);
             _agents.Add(agent);
         }
 
@@ -420,11 +484,10 @@ namespace OSMImporter.Traffic
                 agent.PreferredLane = lane;
                 agent.Patience      = Random.Range(3f, 8f);
 
-                // Gán tính cách ngẫu nhiên từ PersonalitiesList và Jitter nhẹ
-                if (PersonalitiesList != null && PersonalitiesList.Count > 0)
+                // Gán tính cách theo tỷ lệ 90% bình thường, 10% đặc biệt và Jitter nhẹ
+                VehiclePersonality p = GetRandomPersonality();
+                if (p != null)
                 {
-                    int pIdx = Random.Range(0, PersonalitiesList.Count);
-                    VehiclePersonality p = PersonalitiesList[pIdx].Clone();
                     p.Jitter(0.08f);
                     agent.Personality = p;
                 }
@@ -438,6 +501,7 @@ namespace OSMImporter.Traffic
                     }
                 }
 
+                agent.InitWithCustomRoute(wp, null);
                 _agents.Add(agent);
             }
         }
@@ -539,16 +603,19 @@ namespace OSMImporter.Traffic
                 }
             }
             
-            // Fallback defaults
+            // Trọng số spawn dự phòng cho từng loại đường phố Việt Nam
             switch (roadType.ToLower())
             {
-                case "motorway": return 8f;
-                case "primary": return 5f;
-                case "secondary": return 3f;
-                case "tertiary": return 2f;
-                case "residential": return 1f;
-                case "service": return 0.5f;
-                default: return 1f;
+                case "motorway": return 2f;
+                case "trunk": return 6f;
+                case "primary": return 7f;
+                case "secondary": return 6f;
+                case "tertiary": return 5f;
+                case "residential": return 4f;
+                case "living_street": return 3f;
+                case "service": return 2f;
+                case "unclassified": return 3f;
+                default: return 3f;
             }
         }
 
@@ -556,9 +623,9 @@ namespace OSMImporter.Traffic
         {
             if (string.IsNullOrEmpty(roadType)) roadType = "default";
             
-            float carRatio = 35f;
-            float motoRatio = 55f;
-            float busRatio = 10f;
+            float carRatio = 15f;
+            float motoRatio = 82f;
+            float busRatio = 3f;
             
             // Search in our custom configs
             bool found = false;
@@ -576,26 +643,35 @@ namespace OSMImporter.Traffic
             
             if (!found)
             {
-                // Preset fallbacks
+                // Tỷ lệ phương tiện dự phòng (Đặc thù Hà Nội - 80% xe máy)
                 switch (roadType.ToLower())
                 {
                     case "motorway":
-                        carRatio = 70f; motoRatio = 20f; busRatio = 10f;
+                        carRatio = 80f; motoRatio = 0f; busRatio = 20f;
+                        break;
+                    case "trunk":
+                        carRatio = 35f; motoRatio = 60f; busRatio = 5f;
                         break;
                     case "primary":
-                        carRatio = 45f; motoRatio = 40f; busRatio = 15f;
-                        break;
-                    case "secondary":
-                        carRatio = 30f; motoRatio = 60f; busRatio = 10f;
-                        break;
-                    case "tertiary":
                         carRatio = 20f; motoRatio = 75f; busRatio = 5f;
                         break;
+                    case "secondary":
+                        carRatio = 15f; motoRatio = 80f; busRatio = 5f;
+                        break;
+                    case "tertiary":
+                        carRatio = 10f; motoRatio = 87f; busRatio = 3f;
+                        break;
                     case "residential":
-                        carRatio = 10f; motoRatio = 90f; busRatio = 0f;
+                        carRatio = 5f; motoRatio = 95f; busRatio = 0f;
+                        break;
+                    case "living_street":
+                        carRatio = 3f; motoRatio = 97f; busRatio = 0f;
                         break;
                     case "service":
-                        carRatio = 5f; motoRatio = 95f; busRatio = 0f;
+                        carRatio = 2f; motoRatio = 98f; busRatio = 0f;
+                        break;
+                    case "unclassified":
+                        carRatio = 10f; motoRatio = 90f; busRatio = 0f;
                         break;
                 }
             }
@@ -618,7 +694,6 @@ namespace OSMImporter.Traffic
             
             // Rejection sampling based on road type spawn weights
             float maxWeight = 10f; // maximum allowed weight in inspector config
-            float safeDist = _agents.Count < MaxActiveVehicles * 0.5f ? 10f : 6f;
             
             for (int attempt = 0; attempt < 100; attempt++)
             {
@@ -632,14 +707,37 @@ namespace OSMImporter.Traffic
                 // Get spawn weight for this road type
                 float weight = GetRoadTypeSpawnWeight(wp.RoadType);
                 
+                // Ưu tiên trung tâm thành phố tuyến tính tránh làm trống các khu vực vùng rìa
+                float distToCenter = Vector3.Distance(wp.Position, _mapCenter);
+                float centerFactor = Mathf.Clamp01(1f - (distToCenter / Mathf.Max(10f, _mapRadius)));
+                float combinedWeight = weight * (0.4f + 0.6f * centerFactor);
+
                 // Rejection step
-                if (Random.value * maxWeight >= weight) continue;
+                if (Random.value * maxWeight >= combinedWeight) continue;
                 
-                // Distance check
+                // Xác định loại xe định spawn để tính khoảng cách an toàn tối thiểu
+                VehicleMeshBuilder.VehicleType rolledType = forcedType ?? RollVehicleTypeForRoad(wp.RoadType);
+                
+                float requiredDist = 5f;
+                if (rolledType == VehicleMeshBuilder.VehicleType.Motorbike)
+                {
+                    // Xe máy có thể spawn gần nhau hơn nhiều để tạo mật độ đông đúc
+                    requiredDist = _agents.Count < MaxActiveVehicles * 0.5f ? 3.5f : 2.0f;
+                }
+                else if (rolledType == VehicleMeshBuilder.VehicleType.Bus)
+                {
+                    requiredDist = _agents.Count < MaxActiveVehicles * 0.5f ? 12f : 8f;
+                }
+                else
+                {
+                    requiredDist = _agents.Count < MaxActiveVehicles * 0.5f ? 8f : 5f;
+                }
+
+                // Kiểm tra xem vị trí định spawn có bị quá gần các xe khác không
                 bool tooClose = false;
                 foreach (var a in _agents)
                 {
-                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < safeDist)
+                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < requiredDist)
                     {
                         tooClose = true;
                         break;
@@ -648,10 +746,7 @@ namespace OSMImporter.Traffic
                 
                 if (!tooClose)
                 {
-                    if (!forcedType.HasValue)
-                    {
-                        vehicleType = RollVehicleTypeForRoad(wp.RoadType);
-                    }
+                    vehicleType = rolledType;
                     return wp;
                 }
             }
@@ -662,10 +757,13 @@ namespace OSMImporter.Traffic
                 Waypoint wp = list[Random.Range(0, list.Count)];
                 if (wp.ConnectedWaypointIds.Count > 2 || wp.IsTrafficLight) continue;
                 
+                VehicleMeshBuilder.VehicleType rolledType = forcedType ?? RollVehicleTypeForRoad(wp.RoadType);
+                float requiredDist = (rolledType == VehicleMeshBuilder.VehicleType.Motorbike) ? 1.5f : 4f;
+
                 bool tooClose = false;
                 foreach (var a in _agents)
                 {
-                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < 3f)
+                    if (a != null && Vector3.Distance(a.transform.position, wp.Position) < requiredDist)
                     {
                         tooClose = true;
                         break;
@@ -674,10 +772,7 @@ namespace OSMImporter.Traffic
                 
                 if (!tooClose)
                 {
-                    if (!forcedType.HasValue)
-                    {
-                        vehicleType = RollVehicleTypeForRoad(wp.RoadType);
-                    }
+                    vehicleType = rolledType;
                     return wp;
                 }
             }
@@ -696,7 +791,7 @@ namespace OSMImporter.Traffic
         private static float GetBaseSpeed(VehicleMeshBuilder.VehicleType t)
         {
             if (t == VehicleMeshBuilder.VehicleType.Bus)       return 6f;
-            if (t == VehicleMeshBuilder.VehicleType.Motorbike) return 12f;
+            if (t == VehicleMeshBuilder.VehicleType.Motorbike) return 8.5f;
             return 9f;
         }
 

@@ -57,68 +57,93 @@ namespace OSMImporter.Traffic
             if (_ctx.ExactPathIdx >= _ctx.ExactPath.Count) return;
 
             Transform t = _ctx.Transform;
-            var currentTarget = _ctx.ExactPath[_ctx.ExactPathIdx];
-            Vector3 target = WithY(currentTarget.Position);
-            Vector3 toTarget = target - t.position;
-            toTarget.y = 0f;
 
-            // Hướng đoạn đường vật lý
-            Vector3 roadDir = t.forward;
-            if (_ctx.ExactPathIdx > 0)
+            // ── Khử trùng lặp và tiêu thụ các waypoint đã đi qua ──
+            while (_ctx.ExactPathIdx < _ctx.ExactPath.Count)
             {
-                Vector3 prePt = WithY(_ctx.ExactPath[_ctx.ExactPathIdx - 1].Position);
-                Vector3 delta = target - prePt;
-                delta.y = 0f;
-                if (delta.sqrMagnitude > 0.01f)
-                    roadDir = delta.normalized;
-            }
+                var currentTarget = _ctx.ExactPath[_ctx.ExactPathIdx];
+                Vector3 targetPos = WithY(currentTarget.Position);
+                Vector3 toTargetPos = targetPos - t.position;
+                toTargetPos.y = 0f;
 
-            float distSq = toTarget.sqrMagnitude;
-            float dotPassed = Vector3.Dot(toTarget, roadDir);
+                Vector3 roadDir = t.forward;
+                if (_ctx.ExactPathIdx > 0)
+                {
+                    Vector3 prePt = WithY(_ctx.ExactPath[_ctx.ExactPathIdx - 1].Position);
+                    Vector3 delta = targetPos - prePt;
+                    delta.y = 0f;
+                    if (delta.sqrMagnitude > 0.01f)
+                        roadDir = delta.normalized;
+                }
 
-            // ── Reached waypoint ──
-            bool hasReached = distSq < 1.0f || (distSq < 9.0f && dotPassed < 0f);
+                float distSq = toTargetPos.sqrMagnitude;
+                float dotPassed = Vector3.Dot(toTargetPos, roadDir);
 
-            if (hasReached)
-            {
+                float maxOff = 3.0f;
+                if (currentTarget.WaypointRef != null)
+                    maxOff = RoadUtility.GetMaxOffset(currentTarget.WaypointRef.RoadType);
+                float limitDist = maxOff + 5.0f;
+                // Tính khoảng cách chạm đích theo từng loại xe (xe máy nhỏ bám sát hơn, ô tô/bus rộng hơn)
+                float reachDist = 1.6f;
+                if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) reachDist = 0.8f;
+                else if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Bus) reachDist = 2.4f;
+
+                // Kiểm tra vượt qua waypoint: chỉ bỏ qua nếu ở trong phạm vi sát sườn (tránh nhảy làn/đi nhầm đường)
+                float maxOvershootDist = reachDist + 1.2f;
+                bool hasReached = distSq < (reachDist * reachDist) || (distSq < (maxOvershootDist * maxOvershootDist) && dotPassed < 0f);
+
                 // Hold khi đèn đỏ
                 bool holdForRedLight = _ctx.IsWaitingAtRedLight
                     && _ctx.RedLightStopDist >= 0f && _ctx.RedLightStopDist < 2.5f;
 
-                if (holdForRedLight)
-                {
-                    // Đứng tại vạch, không consume waypoint
-                }
-                else
+                if (hasReached && !holdForRedLight)
                 {
                     if (currentTarget.WaypointRef != null)
                         _ctx.StartNodeId = currentTarget.WaypointRef.OSMNodeId;
 
                     _ctx.ExactPathIdx++;
 
-                    // PathIdx chỉ tăng khi WaypointRef thay đổi
                     if (_ctx.ExactPathIdx < _ctx.ExactPath.Count)
                     {
                         var nextTarget = _ctx.ExactPath[_ctx.ExactPathIdx];
                         if (nextTarget.WaypointRef != currentTarget.WaypointRef)
                             _ctx.PathIdx = Mathf.Min(_ctx.PathIdx + 1, _ctx.Path.Count - 1);
                     }
-
-                    if (_ctx.ExactPathIdx >= _ctx.ExactPath.Count)
-                    {
-                        _ctx.Path.Clear();
-
-                        if (_ctx.DestroyOnArrival)
-                        {
-                            Object.Destroy(_ctx.Agent.gameObject);
-                            return;
-                        }
-
-                        _ctx.Agent.StartCoroutine(_ctx.Agent.WaitThenReroute(Random.Range(0.2f, 1.0f)));
-                    }
-                    return;
+                }
+                else
+                {
+                    break; // Điểm này chưa đạt tới, dừng loop consume
                 }
             }
+
+            if (_ctx.ExactPathIdx >= _ctx.ExactPath.Count)
+            {
+                _ctx.Path.Clear();
+                if (_ctx.DestroyOnArrival)
+                {
+                    Object.Destroy(_ctx.Agent.gameObject);
+                    return;
+                }
+                _ctx.Agent.StartCoroutine(_ctx.Agent.WaitThenReroute(Random.Range(0.2f, 1.0f)));
+                return;
+            }
+
+            var activeTarget = _ctx.ExactPath[_ctx.ExactPathIdx];
+            Vector3 target = WithY(activeTarget.Position);
+            Vector3 toTarget = target - t.position;
+            toTarget.y = 0f;
+
+            // Hướng đoạn đường vật lý cho segment hiện tại
+            Vector3 roadDirActive = t.forward;
+            if (_ctx.ExactPathIdx > 0)
+            {
+                Vector3 prePt = WithY(_ctx.ExactPath[_ctx.ExactPathIdx - 1].Position);
+                Vector3 delta = target - prePt;
+                delta.y = 0f;
+                if (delta.sqrMagnitude > 0.01f)
+                    roadDirActive = delta.normalized;
+            }
+            Vector3 roadDir = roadDirActive;
 
             // ── Tính tốc độ — Dynamic Acceleration/Deceleration with Inertia ──
             float timeConstant = 0.8f; // Phản hồi tăng tốc
@@ -146,53 +171,61 @@ namespace OSMImporter.Traffic
                 return;
             }
 
-            // ── Hướng di chuyển + lateral offset ──
-            Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
-            float shiftDiff = _ctx.OvertakeOffset - _ctx.LaneOffset;
-
-            // Bổ sung chuyển động lắc lư (weaving) - Chỉ áp dụng cho xe máy (Motorbike), ô tô và xe buýt phải đi thẳng hàng chuẩn làn
-            if (_ctx.IsMoto && _ctx.Agent != null && _ctx.Agent.Personality != null && _ctx.Agent.Personality.LaneJitter > 0.01f)
+            // ── Hướng di chuyển: chỉ áp dụng lateral shift khi đang overtake ──
+            float shiftDiff = 0f;
+            if (_ctx.IsOvertaking)
             {
-                float weave = Mathf.Sin(Time.time * 2.2f) * _ctx.Agent.Personality.LaneJitter * 0.75f;
-                shiftDiff += weave;
+                shiftDiff = _ctx.OvertakeOffset - _ctx.LaneOffset;
             }
 
-            Vector3 offsetTarget = target + right * shiftDiff;
+            // ── Tìm điểm lookahead trên ExactPath cách xe khoảng cách tối thiểu (tỷ lệ chuẩn theo tốc độ để ôm cua khít) ──
+            float lookaheadFactor = (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) ? 0.2f : 0.4f;
+            float minLookahead = Mathf.Clamp(_ctx.CurrentSpeed * lookaheadFactor, 2.0f, 8.0f);
+            Vector3 lookaheadTarget = target;
+            int lookaheadIdx = _ctx.ExactPathIdx;
+            float accDist = 0f;
+            Vector3 lastPt = t.position;
+            while (lookaheadIdx < _ctx.ExactPath.Count)
+            {
+                Vector3 ptPos = WithY(_ctx.ExactPath[lookaheadIdx].Position);
+                float dist = Vector3.Distance(lastPt, ptPos);
+                if (accDist + dist >= minLookahead && dist > 0.001f)
+                {
+                    // Nôi suy vị trí chính xác trên đoạn thẳng để lookahead không bị giật cục
+                    float tFactor = (minLookahead - accDist) / dist;
+                    lookaheadTarget = Vector3.Lerp(lastPt, ptPos, tFactor);
+                    break;
+                }
+                accDist += dist;
+                lastPt = ptPos;
+                lookaheadIdx++;
+            }
+            if (lookaheadIdx >= _ctx.ExactPath.Count && _ctx.ExactPath.Count > 0)
+            {
+                lookaheadTarget = WithY(_ctx.ExactPath[_ctx.ExactPath.Count - 1].Position);
+            }
+
+            Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
+            Vector3 offsetTarget = lookaheadTarget + right * shiftDiff;
             Vector3 toOffset = offsetTarget - t.position;
             toOffset.y = 0f;
 
-            // ── Mô hình Lái Xe Đạp Động Học (Kinematic Bicycle Model) ──
-            float length = 1.1f;
-            if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Bus) length = 2.5f;
-            else if (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) length = 0.55f;
-            float wheelbase = length * 0.66f;
-
-            // Chuyển đích đến về hệ tọa độ cục bộ của xe
-            Vector3 localTarget = t.InverseTransformPoint(offsetTarget);
-
-            // Tính góc lái mong muốn: delta = arctan(2 * L * x / d^2)
-            float distToTarget = toOffset.magnitude;
-            float targetSteerAngle = 0f;
-            if (distToTarget > 0.1f)
+            // ── Bám đường ổn định (thay cho mô hình xe đạp động học dễ bị lạng lách) ──
+            Vector3 desiredDir = toOffset.normalized;
+            if (_ctx.CurrentSpeed > 0.1f && toOffset.sqrMagnitude > 0.01f)
             {
-                float steerRad = Mathf.Atan2(2f * wheelbase * localTarget.x, toOffset.sqrMagnitude);
-                targetSteerAngle = Mathf.Clamp(steerRad * Mathf.Rad2Deg, -35f, 35f);
+                float turnSpeed = (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) ? 300f : 180f; // degrees per second
+                float maxAngle = turnSpeed * dt;
+                Vector3 newDir = Vector3.RotateTowards(t.forward, desiredDir, maxAngle * Mathf.Deg2Rad, 0f);
+                t.rotation = Quaternion.LookRotation(newDir);
             }
 
-            // Tốc độ bẻ lái vô lăng
-            float steerSpeed = 120f;
+            // Tính góc lái vô lăng chỉ để hiển thị bánh xe quay cho đẹp (Visual only)
+            float angleDiff = Vector3.SignedAngle(t.forward, desiredDir, Vector3.up);
+            float maxSteer = (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) ? 55f : 35f;
+            float targetSteerAngle = Mathf.Clamp(angleDiff, -maxSteer, maxSteer);
+            float steerSpeed = (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) ? 200f : 120f;
             _currentSteerAngle = Mathf.MoveTowards(_currentSteerAngle, targetSteerAngle, dt * steerSpeed);
-
-            // Tính vận tốc góc (yaw rate = v * tan(steer) / L)
-            float steerRadActual = _currentSteerAngle * Mathf.Deg2Rad;
-            float yawRate = 0f;
-            if (Mathf.Abs(steerRadActual) > 0.001f)
-            {
-                yawRate = (_ctx.CurrentSpeed / wheelbase) * Mathf.Tan(steerRadActual);
-            }
-
-            // Xoay xe
-            t.Rotate(0f, yawRate * Mathf.Rad2Deg * dt, 0f);
 
             // Di chuyển thuần forward (tiến hoặc lùi)
             Vector3 displacement = t.forward * _ctx.CurrentSpeed * dt;
@@ -229,11 +262,30 @@ namespace OSMImporter.Traffic
             {
                 displacement = Vector3.zero;
                 _ctx.DesiredSpeed = 0f;
+                _ctx.CurrentSpeed = 0f; // Reset tốc độ tức thì để tránh giật cục khi mở chặn
                 _ctx.Braking = true;
             }
 
+            // Tính toán chiều cao Y khớp với đường đi
+            float targetY = target.y;
+            if (_ctx.ExactPathIdx > 0 && _ctx.ExactPathIdx < _ctx.ExactPath.Count)
+            {
+                Vector3 prevPos = WithY(_ctx.ExactPath[_ctx.ExactPathIdx - 1].Position);
+                Vector3 ab = target - prevPos;
+                ab.y = 0f;
+                Vector3 ap = t.position - prevPos;
+                ap.y = 0f;
+                
+                float abLenSq = ab.sqrMagnitude;
+                if (abLenSq > 0.001f)
+                {
+                    float tFactor = Mathf.Clamp01(Vector3.Dot(ap, ab) / abLenSq);
+                    targetY = Mathf.Lerp(prevPos.y, target.y, tFactor);
+                }
+            }
+
             t.position += displacement;
-            t.position = WithY(t.position, 0f);
+            t.position = WithY(t.position, targetY);
         }
 
         // ── Steering Wheels ──
@@ -279,7 +331,21 @@ namespace OSMImporter.Traffic
             _bodyPitch = Mathf.MoveTowards(_bodyPitch, pitchTarget, dt * 25f);
             _bodyRoll = Mathf.MoveTowards(_bodyRoll, rollTarget, dt * 35f);
 
-            _bodyPivot.localRotation = Quaternion.Euler(_bodyPitch, 0f, _bodyRoll);
+            // ── Bổ sung góc dốc của đường (Road Slope Pitch) ──
+            float roadPitch = 0f;
+            if (_ctx.ExactPath != null && _ctx.ExactPathIdx < _ctx.ExactPath.Count && _ctx.ExactPathIdx > 0)
+            {
+                Vector3 prevPos = _ctx.ExactPath[_ctx.ExactPathIdx - 1].Position;
+                Vector3 currPos = _ctx.ExactPath[_ctx.ExactPathIdx].Position;
+                Vector3 diff = currPos - prevPos;
+                float horizontalDist = Mathf.Sqrt(diff.x * diff.x + diff.z * diff.z);
+                if (horizontalDist > 0.1f)
+                {
+                    roadPitch = Mathf.Atan2(diff.y, horizontalDist) * Mathf.Rad2Deg;
+                }
+            }
+
+            _bodyPivot.localRotation = Quaternion.Euler(-roadPitch + _bodyPitch, 0f, _bodyRoll);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -313,10 +379,22 @@ namespace OSMImporter.Traffic
                     if (dist < realCollisionDist)
                         _ctx.IsColliding = true;
 
-                    overlapCount++;
-                    float penetration = (minDist - dist) / minDist;
-                    float pushStrength = penetration * penetration * 1.2f + 0.2f;
-                    totalPush += diff.normalized * pushStrength;
+                    // Nếu hai xe đang xếp hàng trước sau (nằm trên trục dọc dọc hành trình), không đẩy ngang để tránh xe bị bắn ra mép đường
+                    float fwdDot = Mathf.Abs(Vector3.Dot(t.forward, diff.normalized));
+                    if (fwdDot > 0.75f)
+                    {
+                        float penetration = (minDist - dist) / minDist;
+                        float pushStrength = penetration * penetration * 1.2f + 0.2f;
+                        Vector3 fwdPush = t.forward * Vector3.Dot(diff.normalized * pushStrength, t.forward);
+                        totalPush += fwdPush;
+                    }
+                    else
+                    {
+                        overlapCount++;
+                        float penetration = (minDist - dist) / minDist;
+                        float pushStrength = penetration * penetration * 1.2f + 0.2f;
+                        totalPush += diff.normalized * pushStrength;
+                    }
                 }
             }
 
@@ -327,14 +405,18 @@ namespace OSMImporter.Traffic
                 if (totalPush.magnitude > maxPush)
                     totalPush = totalPush.normalized * maxPush;
 
-                if ((_ctx.Braking || _ctx.IsWaitingAtRedLight) && _ctx.StuckTimer < 1.0f)
+                // Nếu phanh, dừng đỏ hoặc đứng yên, triệt tiêu lực đẩy tiến và giảm mạnh lực đẩy ngang để tránh xe trôi ma quái
+                if (_ctx.Braking || _ctx.IsWaitingAtRedLight || _ctx.CurrentSpeed < 0.05f)
                 {
                     float fwdComponent = Vector3.Dot(totalPush, t.forward);
-                    if (fwdComponent > 0) totalPush -= t.forward * (fwdComponent * 0.8f);
+                    if (fwdComponent > 0) totalPush -= t.forward * fwdComponent;
+                    
+                    Vector3 lateralPush = totalPush - t.forward * Vector3.Dot(totalPush, t.forward);
+                    totalPush = t.forward * Vector3.Dot(totalPush, t.forward) + lateralPush * 0.1f;
                 }
 
                 t.position += totalPush;
-                t.position = WithY(t.position, 0f);
+                t.position = WithY(t.position, t.position.y); // Giữ nguyên chiều cao hiện tại, không đè về 0
             }
         }
 

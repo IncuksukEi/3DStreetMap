@@ -48,7 +48,7 @@ namespace OSMImporter.Traffic.Rules
                 string src = d.Source;
 
                 // 1. Safety & Collision
-                if (src == "B1" || src == "B5" || src == "ObstacleSensor" || src == "ProximityBrake" || d.Risk > 0.8f)
+                if (src == "B1" || src == "B5" || src == "ObstacleSensor" || src == "ProximityBrake" || src == "SafetyOverride" || src == "BrakeForceRule" || d.Risk > 0.8f)
                 {
                     if (!hasSafety || d.Urgency > safetyDesire.Urgency)
                     {
@@ -57,7 +57,7 @@ namespace OSMImporter.Traffic.Rules
                     }
                 }
                 // 2. Traffic Signal & Laws
-                else if (src == "B6" || src == "B8" || src == "B9" || src == "TrafficRules" || src == "DoNotRunRedLightRule" || src == "StopAtRedLightRule" || src == "PrepareStopYellowRule" || src == "DoNotRunRedLightRule")
+                else if (src == "B6" || src == "B8" || src == "B9" || src == "TrafficRules" || src == "DoNotRunRedLightRule" || src == "StopAtRedLightRule" || src == "PrepareStopYellowRule" || src == "DoNotRunRedLightRule" || src == "MaxSpeedLimitRule")
                 {
                     if (!hasLaw || d.Urgency > lawDesire.Urgency)
                     {
@@ -66,7 +66,7 @@ namespace OSMImporter.Traffic.Rules
                     }
                 }
                 // 3. Navigation & Path following
-                else if (src == "B10" || src == "B11" || src == "B12" || src == "PathNavigator" || src == "OvertakeController" || src == "B17" || src == "MaintainDesiredSpeedRule" || src == "PrepareTurnLaneChangeRule" || src == "KeepCurrentLaneRule")
+                else if (src == "B10" || src == "B11" || src == "B12" || src == "PathNavigator" || src == "OvertakeController" || src == "B17" || src == "MaintainDesiredSpeedRule" || src == "PrepareTurnLaneChangeRule" || src == "KeepCurrentLaneRule" || src == "TargetSpeedRule" || src == "LateralOffsetRule")
                 {
                     if (!hasRoute || d.Urgency > routeDesire.Urgency)
                     {

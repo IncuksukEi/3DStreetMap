@@ -156,7 +156,8 @@ namespace OSMImporter.Traffic
 
             // ── Khởi tạo Context ──
             bool isMoto = VehicleType == VehicleMeshBuilder.VehicleType.Motorbike;
-            float laneOffset = RoadUtility.GetLaneOffset(startWp.RoadType) + (isMoto ? 0.4f : 0f);
+            // Tính toán lane offset thực tế thay vì cố định 0f để xe đi đúng làn phân chia
+            float laneOffset = RoadUtility.GetLaneOffset(startWp.RoadType, VehicleType);
 
             Ctx = new VehicleContext
             {
@@ -379,9 +380,9 @@ namespace OSMImporter.Traffic
             }
         }
 
-        private void AddRuleWithProbability(ITrafficRule<OsmVehicleRuleContext> rule)
+        private void AddRuleWithProbability(ITrafficRule<OsmVehicleRuleContext> rule, float defaultProb = 100f)
         {
-            float prob = 100f; // default 100%
+            float prob = defaultProb;
             if (RuleProbabilities != null && RuleProbabilities.TryGetValue(rule.RuleId, out float p))
             {
                 prob = p;
@@ -395,29 +396,31 @@ namespace OSMImporter.Traffic
 
         private void RegisterDefaultOsmRules()
         {
-            AddRuleWithProbability(new AvoidFrontCollisionRule());
-            AddRuleWithProbability(new AvoidLaneChangeCollisionRule());
-            AddRuleWithProbability(new MaintainSafeDistanceRule());
-            AddRuleWithProbability(new MaxSpeedLimitRule());
-            AddRuleWithProbability(new FullStopWhenTooCloseRule());
-            AddRuleWithProbability(new StopAtRedLightRule());
-            AddRuleWithProbability(new GoOnGreenLightRule());
-            AddRuleWithProbability(new PrepareStopYellowRule());
-            AddRuleWithProbability(new DoNotRunRedLightRule());
-            AddRuleWithProbability(new MaintainDesiredSpeedRule());
-            AddRuleWithProbability(new SmoothAccelerationRule());
-            AddRuleWithProbability(new SmoothDecelerationRule());
-            AddRuleWithProbability(new ClampAccelerationRule());
-            AddRuleWithProbability(new StableHeadingRule());
-            AddRuleWithProbability(new KeepCurrentLaneRule());
-            AddRuleWithProbability(new OvertakeLaneChangeRule());
-            AddRuleWithProbability(new PrepareTurnLaneChangeRule());
-            AddRuleWithProbability(new BlockUnsafeLaneChangeRule());
-            AddRuleWithProbability(new BlockedIntersectionRule());
-            AddRuleWithProbability(new YieldIntersectionRule());
+            // ── ① NHÓM LUẬT CHÍNH (Chiếm 90% hành vi cốt lõi - Luôn kích hoạt) ──
+            AddRuleWithProbability(new AvoidFrontCollisionRule(), 100f);
+            AddRuleWithProbability(new AvoidLaneChangeCollisionRule(), 100f);
+            AddRuleWithProbability(new MaintainSafeDistanceRule(), 100f);
+            AddRuleWithProbability(new MaxSpeedLimitRule(), 100f);
+            AddRuleWithProbability(new FullStopWhenTooCloseRule(), 100f);
+            AddRuleWithProbability(new StopAtRedLightRule(), 100f);
+            AddRuleWithProbability(new GoOnGreenLightRule(), 100f);
+            AddRuleWithProbability(new PrepareStopYellowRule(), 100f);
+            AddRuleWithProbability(new MaintainDesiredSpeedRule(), 100f);
+            AddRuleWithProbability(new SmoothAccelerationRule(), 100f);
+            AddRuleWithProbability(new SmoothDecelerationRule(), 100f);
+            AddRuleWithProbability(new ClampAccelerationRule(), 100f);
+            AddRuleWithProbability(new StableHeadingRule(), 100f);
+            AddRuleWithProbability(new KeepCurrentLaneRule(), 100f);
 
-            // Safe reverse checking rule
-            AddRuleWithProbability(new ReverseReluctanceRule());
+            // ── ② NHÓM LUẬT CÁ BIỆT / TÌNH HUỐNG (Chiếm 10% hành vi đặc biệt) ──
+            AddRuleWithProbability(new DoNotRunRedLightRule(), 90f);            // 90% tài xế nghiêm túc chấp hành, 10% cá biệt vượt đèn
+            AddRuleWithProbability(new OvertakeLaneChangeRule(), 10f);           // 10% cá biệt cố tình lấn làn vượt xe
+            AddRuleWithProbability(new PrepareTurnLaneChangeRule(), 15f);       // 15% chuẩn bị chuyển làn sớm trước khi rẽ
+            AddRuleWithProbability(new BlockUnsafeLaneChangeRule(), 10f);       // 10% tài xế hung hăng chèn ép xe chuyển làn
+            AddRuleWithProbability(new BlockedIntersectionRule(), 10f);         // 10% chèn ép chặn ngã tư (đầu gấu)
+            AddRuleWithProbability(new YieldIntersectionRule(), 15f);           // 15% chủ động nhường đường tại vòng xuyến/nút giao
+            AddRuleWithProbability(new YieldToPedestrianRule(), 10f);           // 10% chủ động nhường người đi bộ sang đường
+            AddRuleWithProbability(new ReverseReluctanceRule(), 10f);           // 10% cực kỳ ngại lùi xe khi bị kẹt đầu
         }
 
         // ══════════════════════════════════════════════════════════════════

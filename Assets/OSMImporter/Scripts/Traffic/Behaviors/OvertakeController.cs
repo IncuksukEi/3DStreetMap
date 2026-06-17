@@ -20,7 +20,7 @@ namespace OSMImporter.Traffic
 
         public void Execute(float dt)
         {
-            PrepareTurn();
+            // PrepareTurn(); // Vô hiệu hóa để tránh lạng lách do xung đột mục tiêu lệch làn với giữ làn
             TryOvertake(dt);
         }
 
@@ -160,6 +160,13 @@ namespace OSMImporter.Traffic
             float eagerness = (_ctx.Agent != null && _ctx.Agent.Personality != null) ? _ctx.Agent.Personality.OvertakeEagerness : 1.0f;
             float overtakeRange = (isMoto ? OVERTAKE_RANGE * 1.8f : OVERTAKE_RANGE) * eagerness;
             var ahead = _ctx.AheadVehicle;
+
+            // Không cho phép ô tô/xe buýt tự ý lách vượt nếu xe trước vẫn đang di chuyển và độ hăm hở vượt thấp
+            if (!isMoto)
+            {
+                if (eagerness < 1.35f || ahead.Ctx.CurrentSpeed > 1.0f)
+                    return;
+            }
 
             bool shouldOvertake = _ctx.AheadDistance < overtakeRange
                 && (ahead.Ctx.CurrentSpeed < _ctx.BaseSpeed * OVERTAKE_SPEED_RATIO * eagerness

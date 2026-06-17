@@ -76,10 +76,33 @@ namespace OSMImporter.Traffic
                 spawnedPositions.Add(wp.Position);
 
                 List<long> incomingNodes = new List<long>();
+                
+                // Thu thập tất cả các waypoint đèn đỏ cùng ngã tư (bán kính 40m)
+                List<Waypoint> nearTrafficLights = new List<Waypoint>();
+                foreach (var w in Graph.Waypoints.Values)
+                {
+                    if (w.IsTrafficLight && Vector3.Distance(w.Position, wp.Position) < 40f)
+                    {
+                        nearTrafficLights.Add(w);
+                    }
+                }
+
+                // Thu thập tất cả các waypoint nối vào bất kỳ waypoint đèn đỏ nào trong nhóm này
                 foreach (var otherWp in Graph.Waypoints.Values)
                 {
-                    if (otherWp.ConnectedWaypointIds.Contains(wp.OSMNodeId))
+                    bool connectsToAny = false;
+                    foreach (var tl in nearTrafficLights)
+                    {
+                        if (otherWp.ConnectedWaypointIds.Contains(tl.OSMNodeId))
+                        {
+                            connectsToAny = true;
+                            break;
+                        }
+                    }
+                    if (connectsToAny && !incomingNodes.Contains(otherWp.OSMNodeId))
+                    {
                         incomingNodes.Add(otherWp.OSMNodeId);
+                    }
                 }
 
                 Intersection intersection = new Intersection

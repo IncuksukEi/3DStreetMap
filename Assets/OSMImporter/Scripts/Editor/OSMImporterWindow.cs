@@ -588,6 +588,7 @@ namespace OSMImporter.Editor
                     var p = new GameObject("WaypointGraph");
                     p.transform.SetParent(_generatedRoot.transform, false);
                     var graph = p.AddComponent<WaypointGraph>();
+                    graph.RoadWidthMultiplier = _roadWidthMultiplier;
                     graph.BuildFromOSM(mapData, _scale);
                     graph.SaveToEntries();
                     UnityEditor.EditorUtility.SetDirty(p);

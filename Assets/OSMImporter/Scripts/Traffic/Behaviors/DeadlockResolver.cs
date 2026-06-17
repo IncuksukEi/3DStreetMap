@@ -223,7 +223,7 @@ namespace OSMImporter.Traffic
             if (target == null) target = vals[Random.Range(0, vals.Count)];
 
             _ctx.StartNodeId = target.OSMNodeId;
-            _ctx.Transform.position = new Vector3(target.Position.x, 0f, target.Position.z);
+            _ctx.Transform.position = target.Position;
             _ctx.DeadlockLevel = 0;
             _ctx.Path.Clear();
             _ctx.ExactPath.Clear();

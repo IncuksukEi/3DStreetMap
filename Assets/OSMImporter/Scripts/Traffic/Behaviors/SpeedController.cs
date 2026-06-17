@@ -50,21 +50,32 @@ namespace OSMImporter.Traffic
         {
             var path = _ctx.Path;
             int idx = _ctx.PathIdx;
-            if (idx <= 0 || idx >= path.Count - 1) return;
+            if (path == null || path.Count < 2) return;
 
-            Vector3 currentDir = path[idx].Position - path[idx - 1].Position;
-            currentDir.y = 0;
-            Vector3 nextDir = path[idx + 1].Position - path[idx].Position;
-            nextDir.y = 0;
+            // Kiểm tra góc rẽ ở các segment tiếp theo (look ahead 2-3 segments) để giảm tốc trước khi vào cua
+            float maxAngle = 0f;
+            int lookAhead = Mathf.Min(3, path.Count - idx - 1);
 
-            if (currentDir.sqrMagnitude > 0.01f && nextDir.sqrMagnitude > 0.01f)
+            for (int i = idx; i <= idx + lookAhead; i++)
             {
-                float angle = Vector3.Angle(currentDir, nextDir);
-                if (angle > CURVE_SLOWDOWN_ANGLE)
+                if (i <= 0 || i >= path.Count - 1) continue;
+
+                Vector3 d1 = path[i].Position - path[i - 1].Position;
+                d1.y = 0;
+                Vector3 d2 = path[i + 1].Position - path[i].Position;
+                d2.y = 0;
+
+                if (d1.sqrMagnitude > 0.01f && d2.sqrMagnitude > 0.01f)
                 {
-                    float factor = Mathf.Lerp(1f, 0.2f, Mathf.InverseLerp(CURVE_SLOWDOWN_ANGLE, 120f, angle));
-                    _ctx.DesiredSpeed *= factor;
+                    float angle = Vector3.Angle(d1, d2);
+                    if (angle > maxAngle) maxAngle = angle;
                 }
+            }
+
+            if (maxAngle > CURVE_SLOWDOWN_ANGLE)
+            {
+                float factor = Mathf.Lerp(1f, 0.25f, Mathf.InverseLerp(CURVE_SLOWDOWN_ANGLE, 90f, maxAngle));
+                _ctx.DesiredSpeed *= factor;
             }
         }
 

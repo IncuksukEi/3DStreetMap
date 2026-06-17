@@ -13,6 +13,7 @@ namespace OSMImporter.Navigation
         public List<long> ConnectedWaypointIds = new List<long>();
         public string   RoadType = "";
         public bool     IsTrafficLight = false;
+        public long     OriginalOSMNodeId;
     }
 
     // ── Serializable container so Dictionary survives Play mode ──────────────
@@ -24,6 +25,7 @@ namespace OSMImporter.Navigation
         public string   RoadType;
         public long[]   Connections;
         public bool     IsTrafficLight;
+        public long     OriginalOSMNodeId;
     }
 
     public class WaypointGraph : MonoBehaviour
@@ -46,10 +48,24 @@ namespace OSMImporter.Navigation
         public Color ConnectionColor  = Color.yellow;
         public float GizmoSize        = 0.5f;
 
+        [Header("Road Settings")]
+        [Tooltip("Hệ số nhân chiều rộng đường (phải khớp với giá trị dùng khi Import OSM)")]
+        public float RoadWidthMultiplier = 1f;
+
         // ── lifecycle ─────────────────────────────────────────────────────────
 
         private void Awake()  => RebuildFromEntries();
         private void OnEnable() { if (Waypoints.Count == 0) RebuildFromEntries(); }
+
+        // ── Nested LaneInfo for build logic ──────────────────────────────────
+        private class LaneInfo
+        {
+            public long WayId;
+            public string RoadType;
+            public bool IsForward;
+            public List<Waypoint> Waypoints = new List<Waypoint>();
+            public List<int> NodeIndices = new List<int>(); // index trong way.NodeRefs ban đầu
+        }
 
         // ── Build from OSM data ───────────────────────────────────────────────
 
@@ -59,49 +75,205 @@ namespace OSMImporter.Navigation
             double originLat = mapData.Bounds.CenterLat;
             double originLon = mapData.Bounds.CenterLon;
 
-            foreach (var way in mapData.GetHighways())
+            List<LaneInfo> allLanes = new List<LaneInfo>();
+            // Key = OSM Node ID, Value = List of (lane, node index in lane)
+            Dictionary<long, List<(LaneInfo lane, int nodeIdx)>> lanesAtOSMNode = new Dictionary<long, List<(LaneInfo lane, int nodeIdx)>>();
+
+            long nextWaypointId = 1000000; // ID tự tăng duy nhất cho từng waypoint làn đường
+
+            var highways = mapData.GetHighways();
+            foreach (var way in highways)
             {
-                for (int i = 0; i < way.NodeRefs.Count; i++)
+                int count = way.NodeRefs.Count;
+                if (count < 2) continue;
+
+                // 1. Tính toán danh sách vị trí Unity cho các node
+                List<Vector3> osmPositions = new List<Vector3>();
+                List<long> osmNodeIds = new List<long>();
+                foreach (long nodeRef in way.NodeRefs)
                 {
-                    long nodeId = way.NodeRefs[i];
-                    if (!Waypoints.ContainsKey(nodeId))
+                    if (mapData.Nodes.TryGetValue(nodeRef, out OSMNode node))
                     {
-                        if (!mapData.Nodes.TryGetValue(nodeId, out OSMNode osmNode)) continue;
-                        Waypoints[nodeId] = new Waypoint
+                        osmPositions.Add(MercatorProjection.LatLonToUnityCorrected(
+                                            node.Latitude, node.Longitude,
+                                            originLat, originLon, scale));
+                        osmNodeIds.Add(nodeRef);
+                    }
+                }
+
+                if (osmPositions.Count < 2) continue;
+                count = osmPositions.Count;
+
+                // 2. Tính toán directions tại mỗi node
+                List<Vector3> directions = new List<Vector3>();
+                for (int i = 0; i < count; i++)
+                {
+                    Vector3 fwd;
+                    if (i == 0)
+                        fwd = (osmPositions[1] - osmPositions[0]).normalized;
+                    else if (i == count - 1)
+                        fwd = (osmPositions[count - 1] - osmPositions[count - 2]).normalized;
+                    else
+                        fwd = ((osmPositions[i + 1] - osmPositions[i]).normalized + (osmPositions[i] - osmPositions[i - 1]).normalized).normalized;
+                    
+                    if (fwd.sqrMagnitude < 0.001f) fwd = Vector3.forward;
+                    directions.Add(fwd.normalized);
+                }
+
+                // 3. Phân chia làn dựa trên loại đường
+                float baseW = RoadUtility.GetRoadBaseWidth(way.HighwayType);
+                float maxOffset = baseW / 2f;
+                bool isOneWay = way.IsOneWay || way.HighwayType == "motorway";
+                bool isReverse = way.IsReverseOneWay;
+
+                // Cấu hình làn cho way này: (float offset, bool isForward)
+                List<(float offset, bool isForward)> laneConfigs = new List<(float offset, bool isForward)>();
+
+                if (isOneWay)
+                {
+                    // Lòng đường rộng chia làn, ví dụ mỗi làn rộng 1.5m
+                    int numLanes = Mathf.Max(1, Mathf.FloorToInt(maxOffset * 2f / 1.5f));
+                    float laneW = (maxOffset * 2f) / numLanes;
+                    for (int L = 0; L < numLanes; L++)
+                    {
+                        float offset = -maxOffset + (L + 0.5f) * laneW;
+                        laneConfigs.Add((offset, !isReverse)); // Nếu reverse thì đi ngược, ngược lại đi xuôi
+                    }
+                }
+                else
+                {
+                    // Đường hai chiều: bên phải đi xuôi (offset > 0), bên trái đi ngược (offset < 0)
+                    int numLanes = Mathf.Max(1, Mathf.FloorToInt(maxOffset / 1.5f));
+                    float laneW = maxOffset / numLanes;
+                    
+                    // Bên phải (đi xuôi)
+                    for (int L = 0; L < numLanes; L++)
+                    {
+                        float offset = (L + 0.5f) * laneW;
+                        laneConfigs.Add((offset, true));
+                    }
+                    // Bên trái (đi ngược)
+                    for (int L = 0; L < numLanes; L++)
+                    {
+                        float offset = -(L + 0.5f) * laneW;
+                        laneConfigs.Add((offset, false));
+                    }
+                }
+
+                // 4. Tạo các waypoint cho từng cấu hình làn
+                foreach (var config in laneConfigs)
+                {
+                    LaneInfo lane = new LaneInfo
+                    {
+                        WayId = way.Id,
+                        RoadType = way.HighwayType,
+                        IsForward = config.isForward
+                    };
+
+                    for (int i = 0; i < count; i++)
+                    {
+                        long osmNodeId = osmNodeIds[i];
+                        Vector3 dir = directions[i];
+                        Vector3 right = new Vector3(dir.z, 0, -dir.x).normalized;
+                        Vector3 lanePos = osmPositions[i] + right * config.offset;
+
+                        // Check traffic signals
+                        bool isTrafficLight = mapData.Nodes.TryGetValue(osmNodeId, out OSMNode osmNode)
+                            && osmNode.Tags.TryGetValue("highway", out string hw) && hw == "traffic_signals";
+
+                        long wpId = nextWaypointId++;
+                        Waypoint wp = new Waypoint
                         {
-                            OSMNodeId = nodeId,
-                            Position  = MercatorProjection.LatLonToUnityCorrected(
-                                            osmNode.Latitude, osmNode.Longitude,
-                                            originLat, originLon, scale),
-                            RoadType  = way.HighwayType,
-                            IsTrafficLight = osmNode.Tags.TryGetValue("highway", out string hw) && hw == "traffic_signals"
+                            OSMNodeId = wpId,
+                            Position = lanePos,
+                            RoadType = way.HighwayType,
+                            IsTrafficLight = isTrafficLight,
+                            OriginalOSMNodeId = osmNodeId
                         };
+
+                        Waypoints[wpId] = wp;
+                        lane.Waypoints.Add(wp);
+                        lane.NodeIndices.Add(i);
+
+                        // Đăng ký làn tại node OSM này
+                        if (!lanesAtOSMNode.ContainsKey(osmNodeId))
+                            lanesAtOSMNode[osmNodeId] = new List<(LaneInfo lane, int nodeIdx)>();
+                        lanesAtOSMNode[osmNodeId].Add((lane, i));
                     }
 
-                    if (i > 0)
-                    {
-                        long prevId = way.NodeRefs[i - 1];
-                        if (Waypoints.ContainsKey(prevId))
-                        {
-                            bool isOneWay = way.IsOneWay || way.HighwayType == "motorway"; 
-                            bool isReverse = way.IsReverseOneWay;
+                    allLanes.Add(lane);
+                }
+            }
 
-                            // Chiều xuôi (prevId -> nodeId)
-                            if (!isReverse)
+            // 5. Kết nối các waypoint trong cùng một làn
+            foreach (var lane in allLanes)
+            {
+                int wpCount = lane.Waypoints.Count;
+                if (lane.IsForward)
+                {
+                    // Đi xuôi: waypoint i nối sang waypoint i + 1
+                    for (int i = 0; i < wpCount - 1; i++)
+                    {
+                        lane.Waypoints[i].ConnectedWaypointIds.Add(lane.Waypoints[i + 1].OSMNodeId);
+                    }
+                }
+                else
+                {
+                    // Đi ngược: waypoint i + 1 nối sang waypoint i
+                    for (int i = wpCount - 1; i > 0; i--)
+                    {
+                        lane.Waypoints[i].ConnectedWaypointIds.Add(lane.Waypoints[i - 1].OSMNodeId);
+                    }
+                }
+            }
+
+            // 6. Kết nối các làn tại giao lộ (Ngã 3, Ngã 4...)
+            foreach (var kv in lanesAtOSMNode)
+            {
+                long J = kv.Key;
+                var laneList = kv.Value;
+
+                // Lọc các node giao lộ (giao giữa >= 2 ways khác nhau)
+                HashSet<long> uniqueWays = new HashSet<long>();
+                foreach (var item in laneList)
+                {
+                    uniqueWays.Add(item.lane.WayId);
+                }
+                if (uniqueWays.Count < 2) continue; // chỉ là node nối tiếp của cùng 1 way, không phải giao lộ
+
+                // Duyệt qua từng làn đi vào ngã tư
+                foreach (var inItem in laneList)
+                {
+                    LaneInfo laneIn = inItem.lane;
+                    int idxIn = inItem.nodeIdx;
+                    Waypoint wpInAtJ = laneIn.Waypoints[idxIn];
+
+                    // Duyệt sang các làn của các way khác để rẽ sang
+                    foreach (var outItem in laneList)
+                    {
+                        LaneInfo laneOut = outItem.lane;
+                        if (laneOut.WayId == laneIn.WayId) continue; // Tránh nối sang làn ngược của cùng 1 đường tại giao lộ
+
+                        int idxOut = outItem.nodeIdx;
+
+                        if (laneOut.IsForward)
+                        {
+                            // Đi xuôi: điểm tiếp theo đi ra khỏi J là index J + 1
+                            if (idxOut + 1 < laneOut.Waypoints.Count)
                             {
-                                if (!Waypoints[prevId].ConnectedWaypointIds.Contains(nodeId))
-                                    Waypoints[prevId].ConnectedWaypointIds.Add(nodeId);
+                                Waypoint targetWp = laneOut.Waypoints[idxOut + 1];
+                                if (!wpInAtJ.ConnectedWaypointIds.Contains(targetWp.OSMNodeId))
+                                    wpInAtJ.ConnectedWaypointIds.Add(targetWp.OSMNodeId);
                             }
-                            // Chiều ngược (nodeId -> prevId)
-                            if (!isOneWay && !isReverse) // !isReverse để an toàn, nếu isReverse thì được phép ngược
+                        }
+                        else
+                        {
+                            // Đi ngược: điểm tiếp theo đi ra khỏi J là index J - 1
+                            if (idxOut - 1 >= 0)
                             {
-                                if (!Waypoints[nodeId].ConnectedWaypointIds.Contains(prevId))
-                                    Waypoints[nodeId].ConnectedWaypointIds.Add(prevId);
-                            }
-                            else if (isReverse)
-                            {
-                                if (!Waypoints[nodeId].ConnectedWaypointIds.Contains(prevId))
-                                    Waypoints[nodeId].ConnectedWaypointIds.Add(prevId);
+                                Waypoint targetWp = laneOut.Waypoints[idxOut - 1];
+                                if (!wpInAtJ.ConnectedWaypointIds.Contains(targetWp.OSMNodeId))
+                                    wpInAtJ.ConnectedWaypointIds.Add(targetWp.OSMNodeId);
                             }
                         }
                     }
@@ -125,7 +297,8 @@ namespace OSMImporter.Navigation
                     Position    = kv.Value.Position,
                     RoadType    = kv.Value.RoadType,
                     Connections = kv.Value.ConnectedWaypointIds.ToArray(),
-                    IsTrafficLight = kv.Value.IsTrafficLight
+                    IsTrafficLight = kv.Value.IsTrafficLight,
+                    OriginalOSMNodeId = kv.Value.OriginalOSMNodeId
                 });
             }
         }
@@ -141,7 +314,8 @@ namespace OSMImporter.Navigation
                     Position             = e.Position,
                     RoadType             = e.RoadType,
                     ConnectedWaypointIds = new List<long>(e.Connections ?? System.Array.Empty<long>()),
-                    IsTrafficLight       = e.IsTrafficLight
+                    IsTrafficLight       = e.IsTrafficLight,
+                    OriginalOSMNodeId    = e.OriginalOSMNodeId
                 };
             }
         }
@@ -293,7 +467,7 @@ namespace OSMImporter.Navigation
                         congestionMult = cCost;
 
                     float tentativeG = gScore[current] 
-                        + edgeDist * roadWeight * randomFactor * turnPenalty * continuityMult * congestionMult;
+                        + edgeDist * roadWeight * turnPenalty * continuityMult * congestionMult;
                     
                     if (!gScore.TryGetValue(neighborId, out float existingG)) existingG = float.MaxValue;
 

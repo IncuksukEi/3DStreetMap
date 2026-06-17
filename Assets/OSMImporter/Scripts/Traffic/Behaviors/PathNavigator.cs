@@ -28,8 +28,14 @@ namespace OSMImporter.Traffic
             var graph = _ctx.Graph;
             if (graph == null || graph.Waypoints.Count < 2) return;
 
-            var keys = new List<long>(graph.Waypoints.Keys);
             Vector3 myPos = _ctx.Transform.position;
+            var currentWp = graph.FindNearest(myPos);
+            if (currentWp != null)
+            {
+                _ctx.StartNodeId = currentWp.OSMNodeId;
+            }
+
+            var keys = new List<long>(graph.Waypoints.Keys);
             float minDistSq = 50f * 50f;
 
             bool pickedTarget = false;
@@ -48,6 +54,24 @@ namespace OSMImporter.Traffic
                     {
                         minDistSq *= 0.5f;
                         continue;
+                    }
+
+                    // Tỷ lệ chấp nhận đích đến theo tầm quan trọng của đường để xe tập trung đi trên đường lớn
+                    float destWeight = 1.0f;
+                    switch (destWp.RoadType.ToLower())
+                    {
+                        case "motorway":    destWeight = 10f; break;
+                        case "trunk":       destWeight = 8f;  break;
+                        case "primary":     destWeight = 6f;  break;
+                        case "secondary":   destWeight = 4f;  break;
+                        case "tertiary":    destWeight = 1.5f;break;
+                        case "residential": destWeight = 0.2f;break;
+                        case "service":     destWeight = 0.05f;break;
+                        default:            destWeight = 1.0f;break;
+                    }
+                    if (Random.value * 10f >= destWeight)
+                    {
+                        continue; // Bỏ qua đích đến này để tìm điểm khác ưu tiên đường lớn hơn
                     }
                 }
 
@@ -98,89 +122,96 @@ namespace OSMImporter.Traffic
             _ctx.PathIdx = 0;
             if (rawPath == null || rawPath.Count < 2) return;
 
-            Transform t = _ctx.Transform;
+            // ── Bước 1: Subdivide đoạn dài bằng nội suy tuyến tính (đơn giản, không Catmull-Rom) ──
+            var points = new List<(Vector3 pos, int rawIdx)>();
+            points.Add((rawPath[0].Position, 0));
 
-            // Bước 1: Tạo center-line points (không offset) cho toàn bộ path
-            var centerPoints = new List<Vector3>(rawPath.Count);
-            for (int i = 0; i < rawPath.Count; i++)
-                centerPoints.Add(rawPath[i].Position);
-
-            // Bước 2: Subdivide các đoạn dài / cong bằng Catmull-Rom
-            var subdividedPoints = new List<(Vector3 pos, int rawIdx)>();
-            subdividedPoints.Add((centerPoints[0], 0));
-
-            for (int i = 0; i < centerPoints.Count - 1; i++)
+            for (int i = 0; i < rawPath.Count - 1; i++)
             {
-                Vector3 p0 = centerPoints[i];
-                Vector3 p1 = centerPoints[i + 1];
+                Vector3 p0 = rawPath[i].Position;
+                Vector3 p1 = rawPath[i + 1].Position;
                 float segLen = Vector3.Distance(p0, p1);
 
-                // Tính góc cua tại điểm tiếp theo
-                float angle = 0f;
-                if (i + 2 < centerPoints.Count)
+                // Chiều dài segment tối đa = 4m (cố định, đơn giản, ổn định)
+                int subs = Mathf.Max(1, Mathf.CeilToInt(segLen / 4.0f));
+                for (int s = 1; s < subs; s++)
                 {
-                    Vector3 d1 = (p1 - p0); d1.y = 0;
-                    Vector3 d2 = (centerPoints[i + 2] - p1); d2.y = 0;
-                    if (d1.sqrMagnitude > 0.01f && d2.sqrMagnitude > 0.01f)
-                        angle = Vector3.Angle(d1, d2);
+                    float t = (float)s / subs;
+                    points.Add((Vector3.Lerp(p0, p1, t), i));
                 }
-
-                // Số điểm nội suy tùy theo độ dài + góc cua
-                int subdivisions = Mathf.Max(1, Mathf.CeilToInt(segLen / MAX_SEGMENT_LENGTH));
-                if (angle > CURVE_SUBDIVIDE_ANGLE)
-                    subdivisions = Mathf.Max(subdivisions, Mathf.CeilToInt(angle / 15f));
-
-                if (subdivisions > 1)
-                {
-                    // Catmull-Rom control points
-                    Vector3 cp0 = (i > 0) ? centerPoints[i - 1] : p0 - (p1 - p0);
-                    Vector3 cp3 = (i + 2 < centerPoints.Count) ? centerPoints[i + 2] : p1 + (p1 - p0);
-
-                    for (int s = 1; s < subdivisions; s++)
-                    {
-                        float tParam = (float)s / subdivisions;
-                        Vector3 interp = CatmullRom(cp0, p0, p1, cp3, tParam);
-                        interp.y = Mathf.Lerp(p0.y, p1.y, tParam);
-                        subdividedPoints.Add((interp, i)); // rawIdx = segment start
-                    }
-                }
-
-                subdividedPoints.Add((p1, i + 1));
+                points.Add((p1, i + 1));
             }
 
-            // Bước 3: Áp dụng lane offset cho subdivided points
-            for (int i = 0; i < subdividedPoints.Count; i++)
+            // ── Bước 2: Tính hướng đường tại mỗi điểm (Tránh chia 0 và lạng lách do nhiễu khoảng cách) ──
+            Vector3[] directions = new Vector3[points.Count];
+            for (int i = 0; i < points.Count; i++)
             {
-                var (pos, rawIdx) = subdividedPoints[i];
-                Waypoint wpRef = rawPath[Mathf.Clamp(rawIdx, 0, rawPath.Count - 1)];
-                float curMax = RoadUtility.GetMaxOffset(wpRef.RoadType);
-                float curOffset = Mathf.Min(_ctx.LaneOffset, curMax);
-
-                // Tính hướng đường tại điểm này
                 Vector3 fwd;
-                if (i == 0 && subdividedPoints.Count > 1)
-                    fwd = (subdividedPoints[1].pos - pos);
-                else if (i == subdividedPoints.Count - 1 && i > 0)
-                    fwd = (pos - subdividedPoints[i - 1].pos);
-                else if (i > 0 && i < subdividedPoints.Count - 1)
-                    fwd = (subdividedPoints[i + 1].pos - subdividedPoints[i - 1].pos);
+                if (i == 0 && points.Count > 1)
+                    fwd = points[1].pos - points[0].pos;
+                else if (i == points.Count - 1)
+                    fwd = points[i].pos - points[i - 1].pos;
                 else
-                    fwd = t.forward;
+                    fwd = points[i + 1].pos - points[i - 1].pos;
 
                 fwd.y = 0f;
-                if (fwd.sqrMagnitude < 0.001f) fwd = t.forward;
-                fwd.Normalize();
-
-                Vector3 right = Vector3.Cross(Vector3.up, fwd).normalized;
-                Vector3 offsetPos = pos + right * curOffset;
-                offsetPos.y = pos.y;
-
-                _ctx.ExactPath.Add(new VehicleAgent.PathPoint
+                if (fwd.sqrMagnitude < 0.001f && i > 0)
                 {
-                    Position = offsetPos,
-                    WaypointRef = wpRef
-                });
+                    directions[i] = directions[i - 1]; // Tránh lỗi góc vuông quay ngược khi bị trùng Node
+                }
+                else
+                {
+                    if (fwd.sqrMagnitude < 0.001f) fwd = Vector3.forward;
+                    directions[i] = fwd.normalized;
+                }
             }
+
+            // ── Bước 3: Áp dụng lane offset tỉ lệ với chiều rộng của từng loại đường để tránh đè vỉa hè ──
+            float laneOffset = _ctx.LaneOffset;
+
+            if (Mathf.Abs(laneOffset) < 0.01f)
+            {
+                for (int i = 0; i < points.Count; i++)
+                {
+                    var (pos, rawIdx) = points[i];
+                    Waypoint wpRef = rawPath[Mathf.Clamp(rawIdx, 0, rawPath.Count - 1)];
+                    _ctx.ExactPath.Add(new VehicleAgent.PathPoint
+                    {
+                        Position = pos,
+                        WaypointRef = wpRef
+                    });
+                }
+            }
+            else
+            {
+                float startRoadMaxOffset = RoadUtility.GetMaxOffset(rawPath[0].RoadType);
+                float offsetRatio = Mathf.Clamp01(laneOffset / Mathf.Max(0.5f, startRoadMaxOffset));
+
+                for (int i = 0; i < points.Count; i++)
+                {
+                    var (pos, rawIdx) = points[i];
+                    Waypoint wpRef = rawPath[Mathf.Clamp(rawIdx, 0, rawPath.Count - 1)];
+
+                    float maxOff = RoadUtility.GetMaxOffset(wpRef.RoadType);
+                    float curOffset = offsetRatio * maxOff;
+
+                    // Giới hạn an toàn tuyệt đối theo kích thước xe
+                    float safeMax = Mathf.Max(0.1f, maxOff - (_ctx.VehicleWidth * 0.5f + 0.15f));
+                    curOffset = Mathf.Min(curOffset, safeMax);
+
+                    Vector3 right = Vector3.Cross(Vector3.up, directions[i]).normalized;
+                    Vector3 offsetPos = pos + right * curOffset;
+                    offsetPos.y = pos.y;
+
+                    _ctx.ExactPath.Add(new VehicleAgent.PathPoint
+                    {
+                        Position = offsetPos,
+                        WaypointRef = wpRef
+                    });
+                }
+            }
+
+            // Không làm mịn (smoothing) ở đây vì nó sẽ làm đường chạy bị cắt góc và lệch khỏi tim làn đường thực tế.
         }
 
         /// <summary>Catmull-Rom spline interpolation giữa p1 và p2.</summary>
@@ -211,6 +242,12 @@ namespace OSMImporter.Traffic
             {
                 PickNewDestination();
                 return;
+            }
+
+            var currentWp = graph.FindNearest(_ctx.Transform.position);
+            if (currentWp != null)
+            {
+                _ctx.StartNodeId = currentWp.OSMNodeId;
             }
 
             // Đánh dấu path cũ là congested để A* tránh
