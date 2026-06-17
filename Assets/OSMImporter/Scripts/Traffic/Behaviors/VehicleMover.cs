@@ -77,7 +77,7 @@ namespace OSMImporter.Traffic
             float dotPassed = Vector3.Dot(toTarget, roadDir);
 
             // ── Reached waypoint ──
-            bool hasReached = distSq < 1.0f || (distSq < 9.0f && dotPassed < 0f);
+            bool hasReached = distSq < 1.5f || dotPassed < 0f;
 
             if (hasReached)
             {

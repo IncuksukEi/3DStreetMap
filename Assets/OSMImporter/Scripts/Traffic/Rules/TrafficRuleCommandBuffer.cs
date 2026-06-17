@@ -45,7 +45,11 @@ namespace OSMImporter.Traffic.Rules
 
         // ── Lateral commands ──
 
-        public void SetLateralOffset(float offset) => _lateralOffset = offset;
+        public void SetLateralOffset(float offset)
+        {
+            if (!_lateralOffset.HasValue)
+                _lateralOffset = offset;
+        }
 
         public void DenyLaneChange() => _denyLaneChange = true;
 

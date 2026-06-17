@@ -186,7 +186,27 @@ namespace OSMImporter.Traffic
                 Driver             = driver
             };
 
-            transform.position = WithY(startWp.Position);
+            Vector3 startPos = startWp.Position;
+            if (startWp.ConnectedWaypointIds.Count > 0)
+            {
+                long nextId = startWp.ConnectedWaypointIds[0];
+                if (Graph.Waypoints.TryGetValue(nextId, out var nextWp))
+                {
+                    Vector3 fwdDir = (nextWp.Position - startWp.Position);
+                    fwdDir.y = 0;
+                    if (fwdDir.sqrMagnitude > 0.01f)
+                    {
+                        fwdDir.Normalize();
+                        Vector3 rightDir = Vector3.Cross(Vector3.up, fwdDir).normalized;
+                        float curMax = RoadUtility.GetMaxOffset(startWp.RoadType);
+                        float curOffset = Mathf.Min(laneOffset, curMax);
+                        startPos = startWp.Position + rightDir * curOffset;
+                        transform.rotation = Quaternion.LookRotation(fwdDir);
+                    }
+                }
+            }
+
+            transform.position = WithY(startPos);
 
             // ── Khởi tạo Behavior Modules ──
             Sensor            = new ObstacleSensor(Ctx);

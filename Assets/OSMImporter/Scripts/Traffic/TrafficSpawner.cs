@@ -151,26 +151,26 @@ namespace OSMImporter.Traffic
         {
             RuleProbabilities = new List<RuleConfig>
             {
-                new RuleConfig { RuleId = "B1", RuleName = "Avoid Front Collision", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B2", RuleName = "Avoid Lane Change Collision", ApplyProbability = 95f },
+                new RuleConfig { RuleId = "B1", RuleName = "Avoid Front Collision", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B2", RuleName = "Avoid Lane Change Collision", ApplyProbability = 90f },
                 new RuleConfig { RuleId = "B3", RuleName = "Maintain Safe Distance", ApplyProbability = 90f },
-                new RuleConfig { RuleId = "B4", RuleName = "Max Speed Limit", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B5", RuleName = "Full Stop When Too Close", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B6", RuleName = "Stop At Red Light", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B7", RuleName = "Go On Green Light", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B8", RuleName = "Prepare Stop Yellow", ApplyProbability = 80f },
-                new RuleConfig { RuleId = "B9", RuleName = "Do Not Run Red Light", ApplyProbability = 98f },
-                new RuleConfig { RuleId = "B10", RuleName = "Maintain Desired Speed", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B11", RuleName = "Smooth Acceleration", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B12", RuleName = "Smooth Deceleration", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B13", RuleName = "Clamp Acceleration", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B14", RuleName = "Stable Heading", ApplyProbability = 100f },
-                new RuleConfig { RuleId = "B15", RuleName = "Keep Current Lane", ApplyProbability = 85f },
-                new RuleConfig { RuleId = "B16", RuleName = "Overtake Lane Change", ApplyProbability = 75f },
-                new RuleConfig { RuleId = "B17", RuleName = "Prepare Turn Lane Change", ApplyProbability = 90f },
-                new RuleConfig { RuleId = "B18", RuleName = "Block Unsafe Lane Change", ApplyProbability = 95f },
-                new RuleConfig { RuleId = "B19", RuleName = "Blocked Intersection", ApplyProbability = 85f },
-                new RuleConfig { RuleId = "B20", RuleName = "Yield Intersection", ApplyProbability = 90f }
+                new RuleConfig { RuleId = "B4", RuleName = "Max Speed Limit", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B5", RuleName = "Full Stop When Too Close", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B6", RuleName = "Stop At Red Light", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B7", RuleName = "Go On Green Light", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B8", RuleName = "Prepare Stop Yellow", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B9", RuleName = "Do Not Run Red Light", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B10", RuleName = "Maintain Desired Speed", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B11", RuleName = "Smooth Acceleration", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B12", RuleName = "Smooth Deceleration", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B13", RuleName = "Clamp Acceleration", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B14", RuleName = "Stable Heading", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B15", RuleName = "Keep Current Lane", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B16", RuleName = "Overtake Lane Change", ApplyProbability = 10f },
+                new RuleConfig { RuleId = "B17", RuleName = "Prepare Turn Lane Change", ApplyProbability = 10f },
+                new RuleConfig { RuleId = "B18", RuleName = "Block Unsafe Lane Change", ApplyProbability = 90f },
+                new RuleConfig { RuleId = "B19", RuleName = "Blocked Intersection", ApplyProbability = 10f },
+                new RuleConfig { RuleId = "B20", RuleName = "Yield Intersection", ApplyProbability = 10f }
             };
         }
 

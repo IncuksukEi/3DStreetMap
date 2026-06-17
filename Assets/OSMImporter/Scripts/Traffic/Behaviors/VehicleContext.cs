@@ -101,5 +101,33 @@ namespace OSMImporter.Traffic
                 return Mathf.Max(0.2f, baseMax - (VehicleWidth * 0.5f + 0.1f) + spill);
             }
         }
+
+        /// <summary>
+        /// Min offset tại waypoint hiện tại. Với đường 2 chiều, tối thiểu là 0 (tim đường) để tránh lấn làn ngược chiều.
+        /// </summary>
+        public float CurrentMinOffset
+        {
+            get
+            {
+                if (PathIdx < Path.Count && Graph != null)
+                {
+                    Waypoint currentWp = Path[PathIdx];
+                    bool isTwoWay = false;
+                    foreach (long nextId in currentWp.ConnectedWaypointIds)
+                    {
+                        if (Graph.Waypoints.TryGetValue(nextId, out var nextWp))
+                        {
+                            if (nextWp.ConnectedWaypointIds.Contains(currentWp.OSMNodeId))
+                            {
+                                isTwoWay = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (isTwoWay) return 0f;
+                }
+                return -CurrentMaxOffset;
+            }
+        }
     }
 }
