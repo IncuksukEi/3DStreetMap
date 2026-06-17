@@ -66,18 +66,18 @@ namespace OSMImporter.Traffic
                 Vector3 toTargetPos = targetPos - t.position;
                 toTargetPos.y = 0f;
 
-                Vector3 roadDir = t.forward;
+                Vector3 segmentDir = t.forward;
                 if (_ctx.ExactPathIdx > 0)
                 {
                     Vector3 prePt = WithY(_ctx.ExactPath[_ctx.ExactPathIdx - 1].Position);
                     Vector3 delta = targetPos - prePt;
                     delta.y = 0f;
                     if (delta.sqrMagnitude > 0.01f)
-                        roadDir = delta.normalized;
+                        segmentDir = delta.normalized;
                 }
 
                 float distSq = toTargetPos.sqrMagnitude;
-                float dotPassed = Vector3.Dot(toTargetPos, roadDir);
+                float dotPassed = Vector3.Dot(toTargetPos, segmentDir);
 
                 float maxOff = 3.0f;
                 if (currentTarget.WaypointRef != null)

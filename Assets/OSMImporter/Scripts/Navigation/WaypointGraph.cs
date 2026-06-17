@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using OSMImporter.Data;
 using OSMImporter.Geo;
+using OSMImporter.Traffic;
 
 namespace OSMImporter.Navigation
 {
