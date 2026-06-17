@@ -61,11 +61,12 @@ namespace OSMImporter.Traffic
             if (maxTurnAngle < 35f) return;
 
             float curMax = RoadUtility.GetMaxOffset(path[idx].RoadType);
+            float curMin = _ctx.CurrentMinOffset;
             float shiftRatio = Mathf.InverseLerp(35f, 100f, maxTurnAngle);
 
             if (turnSign < -0.1f)
             {
-                float leftTarget = Mathf.Lerp(_ctx.LaneOffset, -curMax * 0.3f, shiftRatio);
+                float leftTarget = Mathf.Lerp(_ctx.LaneOffset, Mathf.Max(curMin, -curMax * 0.3f), shiftRatio);
                 _ctx.TargetOvertakeOffset = Mathf.Min(_ctx.TargetOvertakeOffset, leftTarget);
             }
             else if (turnSign > 0.1f)
@@ -74,7 +75,7 @@ namespace OSMImporter.Traffic
                 _ctx.TargetOvertakeOffset = Mathf.Max(_ctx.TargetOvertakeOffset, rightTarget);
             }
 
-            _ctx.TargetOvertakeOffset = Mathf.Clamp(_ctx.TargetOvertakeOffset, -curMax, curMax);
+            _ctx.TargetOvertakeOffset = Mathf.Clamp(_ctx.TargetOvertakeOffset, curMin, curMax);
         }
 
         // ══════════════════════════════════════════════════════════════════
@@ -179,11 +180,12 @@ namespace OSMImporter.Traffic
             float passWidth = isMoto ? Mathf.Max(1.0f, _ctx.VehicleWidth * 1.1f) : Mathf.Max(1.5f, _ctx.VehicleWidth * 1.2f);
             float lateralCheck = isMoto ? 1.2f : passWidth + 0.8f;
             float maxWid = _ctx.CurrentMaxOffset;
+            float minWid = _ctx.CurrentMinOffset;
 
             // Kiểm tra bên TRÁI
             bool leftClear = false;
             float targetLeft = _ctx.LaneOffset - passWidth;
-            targetLeft = Mathf.Max(targetLeft, -maxWid);
+            targetLeft = Mathf.Max(targetLeft, minWid);
             if (targetLeft >= -maxWid)
             {
                 leftClear = IsLateralClear(-t.right, lateralCheck);

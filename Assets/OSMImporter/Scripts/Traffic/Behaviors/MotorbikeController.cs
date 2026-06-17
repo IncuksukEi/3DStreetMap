@@ -54,11 +54,13 @@ namespace OSMImporter.Traffic
             float bestProgressDist = 0f;
             float currentOffset = _ctx.OvertakeOffset;
 
+            float minOff = _ctx.CurrentMinOffset;
+
             // Quét các lane offset từ trái sang phải để tìm hành lang trống xa nhất
             Vector3 roadDir = t.forward;
             Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
 
-            for (float off = -maxOff; off <= maxOff; off += 0.2f)
+            for (float off = minOff; off <= maxOff; off += 0.2f)
             {
                 Vector3 scanPos = t.position + right * (off - currentOffset);
                 float clearDist = GetClearDistanceForward(scanPos, motorbikeWidth + clearance * 1.5f);
@@ -117,10 +119,11 @@ namespace OSMImporter.Traffic
 
             Vector3 roadDir = t.forward;
             Vector3 right = Vector3.Cross(Vector3.up, roadDir).normalized;
+            float minOff = _ctx.CurrentMinOffset;
 
             foreach (float off in testOffsets)
             {
-                if (off < -maxOff || off > maxOff) continue;
+                if (off < minOff || off > maxOff) continue;
 
                 Vector3 scanPos = t.position + right * (off - currentOffset);
                 float clearDist = GetClearDistanceForward(scanPos, motorbikeWidth + clearance * 1.5f);

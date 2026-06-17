@@ -178,6 +178,13 @@ namespace OSMImporter.Traffic
                 shiftDiff = _ctx.OvertakeOffset - _ctx.LaneOffset;
             }
 
+            // Bổ sung chuyển động lắc lư (weaving) - Chỉ áp dụng cho xe máy (Motorbike), ô tô và xe buýt phải đi thẳng hàng chuẩn làn
+            if (_ctx.IsMoto && _ctx.Agent != null && _ctx.Agent.Personality != null && _ctx.Agent.Personality.LaneJitter > 0.01f)
+            {
+                float weave = Mathf.Sin(Time.time * 2.2f) * _ctx.Agent.Personality.LaneJitter * 0.75f;
+                shiftDiff += weave;
+            }
+
             // ── Tìm điểm lookahead trên ExactPath cách xe khoảng cách tối thiểu (tỷ lệ chuẩn theo tốc độ để ôm cua khít) ──
             float lookaheadFactor = (_ctx.VehicleType == VehicleMeshBuilder.VehicleType.Motorbike) ? 0.2f : 0.4f;
             float minLookahead = Mathf.Clamp(_ctx.CurrentSpeed * lookaheadFactor, 2.0f, 8.0f);

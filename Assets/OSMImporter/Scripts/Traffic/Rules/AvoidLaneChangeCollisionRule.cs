@@ -11,7 +11,7 @@ namespace OSMImporter.Traffic.Rules
 
         public void Execute(OsmVehicleRuleContext context, TrafficRuleCommandBuffer commands)
         {
-            if (context.AheadVehicle == null) return;
+            if (context.AheadVehicle == null || context.AheadVehicle == context.Ctx.OvertakingTarget) return;
 
             float safeDistance = context.MinFollowDistance + context.CurrentSpeed * context.SafeReactionTime;
 

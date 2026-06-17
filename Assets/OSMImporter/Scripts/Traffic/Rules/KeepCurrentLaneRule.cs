@@ -11,7 +11,7 @@ namespace OSMImporter.Traffic.Rules
 
         public void Execute(OsmVehicleRuleContext context, TrafficRuleCommandBuffer commands)
         {
-            if (!context.Ctx.IsOvertaking)
+            if (!context.Ctx.IsOvertaking && !context.Ctx.IsStuck)
                 commands.SetLateralOffset(context.Ctx.LaneOffset);
         }
     }

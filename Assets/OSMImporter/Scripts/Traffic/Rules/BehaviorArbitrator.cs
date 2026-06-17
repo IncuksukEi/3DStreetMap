@@ -141,7 +141,7 @@ namespace OSMImporter.Traffic.Rules
             else
             {
                 float oppWeight = (ctx.Driver != null) ? ctx.Driver.Opportunism : 0.5f;
-                float baseOffset = ctx.LaneOffset;
+                float baseOffset = ctx.TargetOvertakeOffset;
 
                 if (hasRoute && !float.IsNaN(routeDesire.TargetLateralOffset))
                 {
@@ -179,7 +179,8 @@ namespace OSMImporter.Traffic.Rules
 
             // Clamp and commit
             float maxOff = ctx.CurrentMaxOffset;
-            ctx.TargetOvertakeOffset = Mathf.Clamp(targetOffset, -maxOff, maxOff);
+            float minOff = ctx.CurrentMinOffset;
+            ctx.TargetOvertakeOffset = Mathf.Clamp(targetOffset, minOff, maxOff);
         }
     }
 }

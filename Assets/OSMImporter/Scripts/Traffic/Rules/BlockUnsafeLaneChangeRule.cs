@@ -11,6 +11,8 @@ namespace OSMImporter.Traffic.Rules
 
         public void Execute(OsmVehicleRuleContext context, TrafficRuleCommandBuffer commands)
         {
+            if (context.AheadVehicle == context.Ctx.OvertakingTarget) return;
+
             if (context.Ctx.IsOvertaking && context.AheadDistance < context.MinFollowDistance)
             {
                 commands.DenyLaneChange();
