@@ -255,7 +255,9 @@ namespace OSMImporter.Traffic
 
                 if (toDist < minGap)
                 {
-                    float dotDir2 = Vector3.Dot(t.forward, toDiff.normalized);
+                    // Quét chướng ngại vật theo hướng di chuyển thực tế (tiến/lùi)
+                    Vector3 moveDir = _ctx.CurrentSpeed >= 0f ? t.forward : -t.forward;
+                    float dotDir2 = Vector3.Dot(moveDir, toDiff.normalized);
 
                     if (dotDir2 > 0.3f)
                     {

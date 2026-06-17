@@ -25,6 +25,17 @@ namespace OSMImporter.Traffic.Rules
         {
             if (ctx == null) return;
 
+            // Nếu xe đang lùi thoát kẹt, giữ nguyên tốc độ lùi và bỏ qua các luật kiểm soát tiến
+            if (ctx.ReversingTimer > 0f)
+            {
+                ctx.Braking = false;
+                ctx.EmergencyBraking = false;
+                float maxOff = ctx.CurrentMaxOffset;
+                float minOff = ctx.CurrentMinOffset;
+                ctx.TargetOvertakeOffset = Mathf.Clamp(ctx.TargetOvertakeOffset, minOff, maxOff);
+                return;
+            }
+
             // default targets
             float finalBrakeIntent = 0f;
             float targetSpeed = ctx.BaseSpeed * ctx.RuntimeSpeedScale;

@@ -31,7 +31,14 @@ namespace OSMImporter.Traffic
 
             if (_ctx.AheadVehicle != null && _ctx.AheadVehicle.Ctx != null
                 && _ctx.AheadVehicle.Ctx.CurrentSpeed < _stuckCheckSpeed)
-                return _ctx.AheadVehicle.DeadlockResolver.IsIntentionallyStopped(depth + 1);
+            {
+                // Chỉ kế thừa trạng thái dừng chủ động nếu xe phía trước đi cùng hướng (cùng hàng/làn)
+                float alignment = Vector3.Dot(_ctx.Transform.forward, _ctx.AheadVehicle.transform.forward);
+                if (alignment > 0.7f)
+                {
+                    return _ctx.AheadVehicle.DeadlockResolver.IsIntentionallyStopped(depth + 1);
+                }
+            }
 
             return false;
         }
