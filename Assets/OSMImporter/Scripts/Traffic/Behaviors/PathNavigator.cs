@@ -210,8 +210,23 @@ namespace OSMImporter.Traffic
                     });
                 }
             }
+            // Làm mịn nhẹ vị trí exact path bằng 3-point moving average để triệt tiêu các pha nhảy làn zig-zag tại ngã tư
+            if (_ctx.ExactPath.Count > 2)
+            {
+                Vector3[] smoothed = new Vector3[_ctx.ExactPath.Count];
+                smoothed[0] = _ctx.ExactPath[0].Position;
+                smoothed[_ctx.ExactPath.Count - 1] = _ctx.ExactPath[_ctx.ExactPath.Count - 1].Position;
 
-            // Không làm mịn (smoothing) ở đây vì nó sẽ làm đường chạy bị cắt góc và lệch khỏi tim làn đường thực tế.
+                for (int i = 1; i < _ctx.ExactPath.Count - 1; i++)
+                {
+                    smoothed[i] = (_ctx.ExactPath[i - 1].Position + _ctx.ExactPath[i].Position + _ctx.ExactPath[i + 1].Position) / 3f;
+                }
+
+                for (int i = 1; i < _ctx.ExactPath.Count - 1; i++)
+                {
+                    _ctx.ExactPath[i].Position = smoothed[i];
+                }
+            }
         }
 
         /// <summary>Catmull-Rom spline interpolation giữa p1 và p2.</summary>

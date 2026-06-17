@@ -162,7 +162,7 @@ namespace OSMImporter.Traffic
                 VehicleAgent other = col.GetComponentInParent<VehicleAgent>();
                 if (other == null || other == _ctx.Agent || other.Ctx == null) continue;
                 if (_ctx.IsOvertaking && other == _ctx.OvertakingTarget) continue;
-                if (other.Ctx.CurrentSpeed < 0.1f && Vector3.Dot(t.forward, (other.transform.position - myPos).normalized) < 0.3f) continue;
+                if (other.Ctx.CurrentSpeed < 0.1f) continue;
 
                 Vector3 otherPos = other.transform.position;
                 Vector3 otherVel = other.transform.forward * other.Ctx.CurrentSpeed;
@@ -193,7 +193,8 @@ namespace OSMImporter.Traffic
                 Vector3 otherFuturePos = otherPos + otherVel * tCPA;
                 float futureDistSq = (myFuturePos - otherFuturePos).sqrMagnitude;
 
-                float safeRadius = (_ctx.VehicleWidth + other.Ctx.VehicleWidth) * 1.0f + 1.5f;
+                // Giảm bán kính an toàn từ 1.0x + 1.5m xuống 0.5x + 0.5m để tránh xe dừng từ quá xa
+                float safeRadius = (_ctx.VehicleWidth + other.Ctx.VehicleWidth) * 0.5f + 0.5f;
                 float safeRadiusSq = safeRadius * safeRadius;
 
                 if (futureDistSq < safeRadiusSq)
